@@ -55,7 +55,7 @@ class HiddenLayer(object):
                 self.n_out
             )
         ), dtype=config.floatX)
-        W_val = np.ones((self.n_in, self.n_out), dtype=config.floatX)
+        #W_val = np.ones((self.n_in, self.n_out), dtype=config.floatX)
 
         b_val = np.zeros((self.n_out,)).astype(config.floatX)
 
@@ -70,7 +70,6 @@ class HiddenLayer(object):
 
             self.top_active = shared(
                 np.repeat(np.arange(self.k).reshape(1, self.k), self.batch_size, axis=0),
-                #np.zeros((self.batch_size, self.k), dtype='int64'),
                 name=name,
             )
 
@@ -86,6 +85,10 @@ class HiddenLayer(object):
         )
 
         self.params = [self.W, self.b]
+
+    def set_parameters(self, W, b):
+        self.W.set_value(W)
+        self.b.set_value(b)
 
     def most_active(self, x):
         return function([], updates=(x, T.argsort(x)))
@@ -161,7 +164,7 @@ class HiddenBlockLayer(HiddenLayer):
                 self.n_units_per_out
             )
         ), dtype=config.floatX)
-        W_val = np.ones((self.n_in, self.n_out, self.n_units_per_in, self.n_units_per_out), dtype=config.floatX)
+        #W_val = np.ones((self.n_in, self.n_out, self.n_units_per_in, self.n_units_per_out), dtype=config.floatX)
 
         b_val = np.zeros(
             outputSize
