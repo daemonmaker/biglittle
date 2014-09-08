@@ -21,6 +21,10 @@ def relu(x):
     return T.maximum(0, x)
 
 
+def maxout(x):
+    return T.max(x, axis=1)
+
+
 def relu_softmax(x):
     return T.nnet.softmax(relu(x))
 
@@ -39,6 +43,51 @@ def add_regularization(layers, cost, L1_reg, L2_reg):
         cost = cost + L1_reg*abs(layer.W).sum() + L2_reg*(layer.W**2).sum()
 
     return cost
+
+
+class LearningRate(object):
+    def __init__(self, init_rate, name):
+        assert(init_rate != 0)
+        #self.rate = shared(init_rate, name=name)
+        assert((init_rate >= 0) and (init_rate <= 1))
+        self.rate = init_rate
+
+    def update(self, name):
+        #return []
+        pass
+
+
+class LinearChangeRate(LearningRate):
+    def __init__(self, init_rate, change, final_rate, name):
+        super(LinearChangeRate, self).__init__(init_rate, name)
+
+        assert((final_rate >= 0) and (final_rate <= 1))
+        self.final_rate = final_rate
+
+        if init_rate < final_rate:
+            assert(change > 0)
+            self.increasing = True
+        else:
+            assert(change < 0)
+            self.increasing = False
+
+        #self.change = shared(change, name + '_change')
+        self.change = change
+
+    def update(self):
+        #update = self.rate + self.change
+        #T.switch(
+        #    self.increasing,
+        #    
+        #)
+        #return [update]
+        self.rate = self.rate + self.change
+
+        if (self.change and
+            (self.increasing and (self.rate > self.final_rate) or
+             ((not self.increasing) and (self.rate < self.final_rate)))):
+            self.rate = self.final_rate
+            self.change = 0
 
 
 def verify_cost(
@@ -252,7 +301,7 @@ def test_big_and_little_train_both(
         b_activations.append(b_activation)
         top_active.append((
             l_layers[i].top_active,
-            T.argsort(l_activation)[:, :l_layers[i].k]
+            T.argsort(T.abs_(l_activation))[:, :l_layers[i].k]
         ))
 
     print "... Building costs and errors"
@@ -443,7 +492,10 @@ def test_big_and_little_train_both(
         for minibatch_index in xrange(n_train_batches):
 
             minibatch_avg_cost = l_train_model(minibatch_index)
-            minibatch_avg_cost_b = b_train_model(minibatch_index)
+            minibatch_avg_cost_b = b_train_model(
+                minibatch_index,
+                learning_rate.rate
+            )
 
             #print "minibatch_avg_cost: " + str(minibatch_avg_cost) + " minibatch_avg_cost_b: " + str(minibatch_avg_cost_b)
             #print l_layers[0].W.get_value().sum(), l_layers[1].W.get_value().sum(), b_layers[0].W.get_value().sum(), b_layers[1].W.get_value().sum()
@@ -523,14 +575,26 @@ def test_big_and_little_train_both(
 
 def test_big_and_little_train_big(
         rng,
-        batch_size=1,
-        learning_rate=0.01,
+        batch_size,
+        learning_rate,
+        momentum_rate,
         n_epochs=1000,
         L1_reg=0.0,
         L2_reg=0.0001
 ):
-    l_learning_rate = learning_rate
-    b_learning_rate = 10*learning_rate
+    def summarize_rates():
+        print "Learning rate: ", b_learning_rate.get_value(), \
+            "Momentum: ", momentum.get_value()
+
+    l_learning_rate = learning_rate.rate
+    b_learning_rate = shared(
+        np.array(learning_rate.rate, dtype=config.floatX),
+        name='learning_rate'
+    )
+    momentum = shared(
+        np.array(momentum_rate.rate, dtype=config.floatX),
+        name='momentum'
+    )
 
     index = T.lscalar('index')
     l_x = T.matrix('l_x', dtype=config.floatX)
@@ -557,26 +621,29 @@ def test_big_and_little_train_big(
     y_size = train_set_y.shape[0].eval()
     n_in = x_size
     n_units_per = 32
-    n_out = 500
+    n_out = 20
     l_layers = []
     b_layers = []
+
+    # Shared variable used for always activating one block in a layer as in the
+    # input and output layer
+    one_block_idxs = shared(
+        np.zeros((batch_size, 1), dtype='int64'),
+        name='one_block_idxs'
+    )
 
     l_layers.append(
         HiddenLayer(
             n_in,
             n_out,
             batch_size,
-            #k=0.05,
             k=1,
+            #k=1,
             activation=T.tanh,
             name='l_layer_' + str(len(l_layers))
         )
     )
 
-    one_block_idxs = shared(
-        np.zeros((batch_size, 1), dtype='int64'),
-        name='one_block_idxs'
-    )
     b_layers.append(
         HiddenBlockLayer(
             (1, x_size),
@@ -585,24 +652,39 @@ def test_big_and_little_train_big(
             l_layers[-1].top_active,
             batch_size,
             activation=T.tanh,
-            name='b_layer_' + str(len(b_layers))
+            name='b_layer_' + str(len(b_layers)),
+            params=l_layers[-1].params,
+            param_map=[('x', 1, 0, 'x'), (0, 'x')]
         )
     )
 
-    #n_in = n_out
-    #n_out = 100
-    #k_activations = 0.12
-    #l_layers.append(
-    #    HiddenLayer(
-    #        n_in,
-    #        n_out,
-    #        k=k_activations,
-    #        name='l_layer_' + str(len(l_layers))
-    #    )
-    #)
-    #b_layers.append(HiddenBlockLayer(n_in, n_out, batch_size))
-
     n_in = n_out
+    l_layers.append(
+        HiddenLayer(
+            n_in,
+            n_out,
+            batch_size,
+            k=0.75,
+            activation=T.nnet.softmax,
+            name='l_layer_' + str(len(l_layers))
+        )
+    )
+
+    b_layers.append(
+        HiddenBlockLayer(
+            (n_in, n_units_per),
+            (n_out, n_units_per),
+            l_layers[-2].top_active,
+            l_layers[-1].top_active,
+            #out_idxs_n,
+            batch_size,
+            activation=T.tanh,
+            name='b_layer_' + str(len(b_layers)),
+            params=l_layers[-1].params,
+            param_map=[(0, 1, 'x', 'x'), (0, 'x')]
+        )
+    )
+
     n_out = 10
     l_layers.append(
         HiddenLayer(
@@ -615,30 +697,28 @@ def test_big_and_little_train_big(
         )
     )
 
-    # T.nnet.softmax takes a matrix not a tensor so just calculate the linear
-    # component in the layer and apply the softmax later
-    #out_idxs_n = shared(
-    #    np.repeat(
-    #        np.arange(n_out, dtype='int64').reshape(1, n_out),
-    #        batch_size,
-    #        axis=0
-    #    ),
-    #    name='out_idxs_' + str(len(l_layers))
-    #)
-    b_layers.append(HiddenBlockLayer(
-        (n_in, n_units_per),
-        (1, n_out),
-        l_layers[-2].top_active,
-        one_block_idxs,
-        #out_idxs_n,
-        batch_size,
-        None,
-        name='b_layer_' + str(len(b_layers))
-    ))
+    b_layers.append(
+        HiddenBlockLayer(
+            (n_in, n_units_per),
+            (1, n_out),
+            l_layers[-2].top_active,
+            one_block_idxs,
+            #out_idxs_n,
+            batch_size,
+            None,
+            name='b_layer_' + str(len(b_layers)),
+            params=l_layers[-1].params,
+            param_map=[(0, 'x', 'x', 1), ('x', 0)]
+        )
+    )
     #b_layers[-1].W.set_value(0*b_layers[-1].W.get_value())
 
     print "... Restoring weights of little model"
-    restore_parameters('parameters.pkl', l_layers)
+    restore_parameters('parameters_20_20_l1_0.0001_l2_0.0001.pkl', l_layers)
+
+    #for l_layer in l_layers:
+    #    for param in l_layer.params:
+    #        param.set_value(np.ones_like(param.get_value()))
 
     print "... Building top active updates"
     top_active = []
@@ -651,7 +731,7 @@ def test_big_and_little_train_big(
         b_activations.append(b_activation)
         top_active.append((
             l_layers[i].top_active,
-            T.argsort(l_activation)[:, :l_layers[i].k]
+            T.argsort(T.abs_(l_activation))[:, :l_layers[i].k]
         ))
 
     print "... Building costs and errors"
@@ -673,6 +753,7 @@ def test_big_and_little_train_big(
     #b_activation = T.nnet.softmax(T.max(b_activation, axis=2))
     #b_activation = relu_softmax(T.max(b_activation, axis=2))
     b_shp = b_activation.shape
+    #b_activation = relu_softmax(b_activation.reshape((b_shp[0], b_shp[2])))
     b_activation = T.nnet.softmax(b_activation.reshape((b_shp[0], b_shp[2])))
     b_activations.append(b_activation)
     b_cost = add_regularization(
@@ -695,13 +776,39 @@ def test_big_and_little_train_big(
             l_param_updates.append((param, param - l_learning_rate*gparam))
 
         for param in b_layers[i].params:
-            gparam = T.grad(
+            b_gparam = T.grad(
                 b_cost,
                 param,
-                consider_constant=[b_layers[i].in_idxs, b_layers[i].out_idxs]
+                #consider_constant=[b_layers[i].in_idxs, b_layers[i].out_idxs]
             )
-            b_grads.append(gparam)
-            b_param_updates.append((param, param - b_learning_rate*gparam))
+            b_velocity = shared(
+                np.zeros_like(param.get_value()),
+                param.name + '_velocity'
+            )
+            b_param_updates.append(
+                (b_velocity, momentum*b_velocity - b_learning_rate*b_gparam)
+            )
+            b_grads.append(b_gparam)
+            b_param_updates.append((param, param + b_velocity))
+
+        #if b_layers[i].l_params is not None:
+            #for param in b_layers[i].l_params:
+                #l_gparam = T.grad(
+                #    b_cost,
+                #    param
+                #)
+                #l_velocity = shared(
+                #    np.zeros_like(param.get_value()),
+                #    param.name + '_velocity'
+                #)
+                #b_param_updates.append((
+                #    l_velocity, momentum*l_velocity - b_learning_rate*l_gparam
+                #))
+                #l_grads.append(l_gparam)
+                #b_param_updates.append((param, param + l_velocity))
+                #b_param_updates.append((
+                #    param, param - 0.0001*l_gparam
+                #))
 
     print "... Compiling little net forward prop function"
     l_train_model = function(
@@ -839,6 +946,7 @@ def test_big_and_little_train_big(
 
     accum = 0
     accum_b = 0
+    summarize_rates()
     while (epoch < n_epochs) and (not done_looping):
         epoch = epoch + 1
         for minibatch_index in xrange(n_train_batches):
@@ -885,7 +993,7 @@ def test_big_and_little_train_big(
                 #ipdb.set_trace()
 
                 # if we got the best validation score until now
-                if this_validation_loss < best_validation_loss:
+                if this_validation_loss_b < best_validation_loss:
                     #improve patience if loss improvement is good enough
                     if this_validation_loss_b < best_validation_loss *  \
                        improvement_threshold:
@@ -908,6 +1016,14 @@ def test_big_and_little_train_big(
                            'best model %f %% (%f %%)') %
                           (epoch, minibatch_index + 1, n_train_batches,
                            test_score * 100., test_score_b * 100.))
+
+                learning_rate.update()
+                b_learning_rate.set_value(learning_rate.rate)
+
+                momentum_rate.update()
+                momentum.set_value(momentum_rate.rate)
+
+                summarize_rates()
 
             if patience <= iter:
                     done_looping = True
@@ -1441,7 +1557,7 @@ def test_associations(
 
 if __name__ == '__main__':
     rng = np.random.RandomState()
-    batch_size = 32
+    batch_size = 128
     n_epochs = 10000
 
 #    test_big_and_little_train_both(
@@ -1453,10 +1569,14 @@ if __name__ == '__main__':
 
     test_big_and_little_train_big(
         rng,
-        batch_size,
-        learning_rate=0.03,
-        n_epochs=10000
+        batch_size=256,
+        learning_rate=LinearChangeRate(0.5, -0.001, 0.01, 'learning_rate'),
+        momentum_rate=LinearChangeRate(0.5, 0.0001, 0.99, 'momentum_rate'),
+        n_epochs=10000,
+        #L1_reg=0.001,
+        #L2_reg=0.0
     )
+    # Experiment in -t 0 is using 0.5, 0.8 and -t 2  is using 0.175, 0.99
 
 #    test_static_activations(
 #        rng,

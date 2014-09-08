@@ -69,22 +69,30 @@ class HiddenLayer(object):
                 name = self.name + '_' + name
 
             self.top_active = shared(
-                np.repeat(np.arange(self.k).reshape(1, self.k), self.batch_size, axis=0),
+                np.repeat(
+                    np.arange(self.k).reshape(1, self.k),
+                    self.batch_size,
+                    axis=0
+                ),
                 name=name,
             )
 
     def _setup_parameters(self, W_val, b_val):
         self.W = shared(
             W_val,
-            name='W_'+str(self.name)
+            name=str(self.name)+'_W'
         )
 
         self.b = shared(
             b_val,
-            name='b_'+str(self.name)
+            name=str(self.name)+'_b'
         )
 
-        self.params = [self.W, self.b]
+
+    def get_params(self):
+        return [self.W, self.b]
+
+    params = property(get_params)
 
     def set_parameters(self, W, b):
         self.W.set_value(W)
@@ -118,7 +126,9 @@ class HiddenBlockLayer(HiddenLayer):
             batch_size,
             activation=T.tanh,
             name='HiddenBlockLayer',
-            rng=None
+            rng=None,
+            params=None,
+            param_map=None
     ):
         assert(
             type(n_in) == tuple
@@ -164,7 +174,15 @@ class HiddenBlockLayer(HiddenLayer):
                 self.n_units_per_out
             )
         ), dtype=config.floatX)
-        #W_val = np.ones((self.n_in, self.n_out, self.n_units_per_in, self.n_units_per_out), dtype=config.floatX)
+        #W_val = np.ones(
+        #    (
+        #        self.n_in,
+        #        self.n_out,
+        #        self.n_units_per_in,
+        #        self.n_units_per_out
+        #    ),
+        #    dtype=config.floatX
+        #)
 
         b_val = np.zeros(
             outputSize
@@ -175,13 +193,32 @@ class HiddenBlockLayer(HiddenLayer):
 
         self._setup_parameters(W_val, b_val)
 
+        if params is not None:
+            assert(param_map is not None)
+        self.l_params = params
+        self.l_param_map = param_map
+
     def output(self, x):
-        sparse = sparse_block_dot_SS(
-            self.W,
-            x,
-            self.in_idxs,
-            self.b,
-            self.out_idxs
-        )
+        if self.l_params is None:
+            sparse = sparse_block_dot_SS(
+                self.W,
+                x,
+                self.in_idxs,
+                self.b,
+                self.out_idxs
+            )
+        else:
+            sparse = sparse_block_dot_SS(
+                self.l_params[0].dimshuffle(
+                    *self.l_param_map[0]
+                )*self.W,
+                #self.W,
+                x,
+                self.in_idxs,
+                self.l_params[1].dimshuffle(
+                    *self.l_param_map[1]
+                )*self.b,
+                self.out_idxs
+            )
         return (sparse if self.activation is None
                 else self.activation(sparse))
