@@ -47,9 +47,8 @@ def add_regularization(layers, cost, L1_reg, L2_reg):
 
 class LearningRate(object):
     def __init__(self, init_rate, name):
-        assert(init_rate != 0)
-        #self.rate = shared(init_rate, name=name)
         assert((init_rate >= 0) and (init_rate <= 1))
+        #self.rate = shared(init_rate, name=name)
         self.rate = init_rate
 
     def update(self, name):
@@ -68,7 +67,7 @@ class LinearChangeRate(LearningRate):
             assert(change > 0)
             self.increasing = True
         else:
-            assert(change < 0)
+            assert(change <= 0)
             self.increasing = False
 
         #self.change = shared(change, name + '_change')
@@ -580,7 +579,11 @@ def test_big_and_little_train_big(
         momentum_rate,
         n_epochs=1000,
         L1_reg=0.0,
-        L2_reg=0.0001
+        L2_reg=0.0001,
+        restore_parameters=False,
+        select_top_active=False,
+        mult_small_net_params=False,
+        zero_last_layer_params=False
 ):
     def summarize_rates():
         print "Learning rate: ", b_learning_rate.get_value(), \
@@ -620,8 +623,8 @@ def test_big_and_little_train_big(
     x_size = train_set_x.shape[1].eval()
     y_size = train_set_y.shape[0].eval()
     n_in = x_size
-    n_units_per = 32
-    n_out = 20
+    n_units_per = 16
+    n_out = 32
     l_layers = []
     b_layers = []
 
@@ -644,6 +647,9 @@ def test_big_and_little_train_big(
         )
     )
 
+    if mult_small_net_params:
+        params = l_layers[-1].params
+
     b_layers.append(
         HiddenBlockLayer(
             (1, x_size),
@@ -653,7 +659,7 @@ def test_big_and_little_train_big(
             batch_size,
             activation=T.tanh,
             name='b_layer_' + str(len(b_layers)),
-            params=l_layers[-1].params,
+            params=params,
             param_map=[('x', 1, 0, 'x'), (0, 'x')]
         )
     )
@@ -664,11 +670,14 @@ def test_big_and_little_train_big(
             n_in,
             n_out,
             batch_size,
-            k=0.75,
+            k=1,
             activation=T.nnet.softmax,
             name='l_layer_' + str(len(l_layers))
         )
     )
+
+    if mult_small_net_params:
+        params = l_layers[-1].params
 
     b_layers.append(
         HiddenBlockLayer(
@@ -680,7 +689,7 @@ def test_big_and_little_train_big(
             batch_size,
             activation=T.tanh,
             name='b_layer_' + str(len(b_layers)),
-            params=l_layers[-1].params,
+            params=params,
             param_map=[(0, 1, 'x', 'x'), (0, 'x')]
         )
     )
@@ -697,6 +706,10 @@ def test_big_and_little_train_big(
         )
     )
 
+
+    if mult_small_net_params:
+        params = l_layers[-1].params
+
     b_layers.append(
         HiddenBlockLayer(
             (n_in, n_units_per),
@@ -707,14 +720,17 @@ def test_big_and_little_train_big(
             batch_size,
             None,
             name='b_layer_' + str(len(b_layers)),
-            params=l_layers[-1].params,
+            params=params,
             param_map=[(0, 'x', 'x', 1), ('x', 0)]
         )
     )
-    #b_layers[-1].W.set_value(0*b_layers[-1].W.get_value())
+    if zero_last_layer_params:
+        b_layers[-1].W.set_value(0*b_layers[-1].W.get_value())
+        b_layers[-1].b.set_value(0*b_layers[-1].b.get_value())
 
-    print "... Restoring weights of little model"
-    restore_parameters('parameters_20_20_l1_0.0001_l2_0.0001.pkl', l_layers)
+    if restore_parameters:
+        print "... Restoring weights of little model"
+        restore_parameters('parameters_20_20_l1_0.0001_l2_0.0001.pkl', l_layers)
 
     #for l_layer in l_layers:
     #    for param in l_layer.params:
@@ -729,10 +745,11 @@ def test_big_and_little_train_big(
         l_activation = l_layers[i].output(l_activation)
         b_activation = b_layers[i].output(b_activation)
         b_activations.append(b_activation)
-        top_active.append((
-            l_layers[i].top_active,
-            T.argsort(T.abs_(l_activation))[:, :l_layers[i].k]
-        ))
+        if select_top_active:
+            top_active.append((
+                l_layers[i].top_active,
+                T.argsort(T.abs_(l_activation))[:, :l_layers[i].k]
+            ))
 
     print "... Building costs and errors"
     l_cost = add_regularization(
@@ -937,6 +954,7 @@ def test_big_and_little_train_big(
 
     best_params = None
     best_validation_loss = np.inf
+    best_validation_loss_b = best_validation_loss
     best_iter = 0
     test_score = 0.
     start_time = time.clock()
@@ -993,13 +1011,14 @@ def test_big_and_little_train_big(
                 #ipdb.set_trace()
 
                 # if we got the best validation score until now
-                if this_validation_loss_b < best_validation_loss:
+                if this_validation_loss_b < best_validation_loss_b:
                     #improve patience if loss improvement is good enough
-                    if this_validation_loss_b < best_validation_loss *  \
+                    if this_validation_loss_b < best_validation_loss_b *  \
                        improvement_threshold:
                         patience = max(patience, iter * patience_increase)
 
-                    best_validation_loss = this_validation_loss_b
+                    best_validation_loss = this_validation_loss
+                    best_validation_loss_b = this_validation_loss_b
                     best_iter = iter
 
                     # test it on the test set
@@ -1030,9 +1049,10 @@ def test_big_and_little_train_big(
                     break
 
     end_time = time.clock()
-    print(('Optimization complete. Best validation score of %f %% '
-           'obtained at iteration %i, with test performance %f %%') %
-          (best_validation_loss * 100., best_iter + 1, test_score * 100.))
+    print('Optimization complete. Best validation score of %f %% (%f %%) '
+           'obtained at iteration %i, with test performance %f %% (%f %%)' %
+          (best_validation_loss * 100., best_validation_loss_b * 100.,
+           best_iter + 1, test_score * 100., test_score_b * 100.))
     print >> sys.stderr, ('The code for file ' +
                           os.path.split(__file__)[1] +
                           ' ran for %.2fm' % ((end_time - start_time) / 60.))
@@ -1558,7 +1578,7 @@ def test_associations(
 if __name__ == '__main__':
     rng = np.random.RandomState()
     batch_size = 128
-    n_epochs = 10000
+    #n_epochs = 1000
 
 #    test_big_and_little_train_both(
 #        rng,
@@ -1570,11 +1590,12 @@ if __name__ == '__main__':
     test_big_and_little_train_big(
         rng,
         batch_size=256,
-        learning_rate=LinearChangeRate(0.5, -0.001, 0.01, 'learning_rate'),
-        momentum_rate=LinearChangeRate(0.5, 0.0001, 0.99, 'momentum_rate'),
-        n_epochs=10000,
-        #L1_reg=0.001,
-        #L2_reg=0.0
+        learning_rate=LinearChangeRate(0.01, 0.0, 0.01, 'learning_rate'),
+        momentum_rate=LinearChangeRate(0.0, 0.0, 0.0, 'momentum_rate'),
+        n_epochs=1000,
+        L1_reg=0.0001,
+        L2_reg=0.0001,
+        zero_last_layer_params=True
     )
     # Experiment in -t 0 is using 0.5, 0.8 and -t 2  is using 0.175, 0.99
 
