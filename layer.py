@@ -62,8 +62,10 @@ class HiddenLayer(object):
         self._setup_parameters(W_val, b_val)
 
         assert(k >= 0. and k <= 1.)
-        self.k = int(k*n_out)
-        if self.k > 0.:
+        if k > 0.:
+            self.k = int(k*n_out)
+            assert(self.k > 0)
+
             name = 'top_active'
             if name is not None:
                 name = self.name + '_' + name
@@ -77,6 +79,9 @@ class HiddenLayer(object):
                 name=name,
             )
 
+    def __str__(self):
+        return "n_in: %d, n_out: %d" % (self.n_in, self.n_out)
+
     def _setup_parameters(self, W_val, b_val):
         self.W = shared(
             W_val,
@@ -87,7 +92,6 @@ class HiddenLayer(object):
             b_val,
             name=str(self.name)+'_b'
         )
-
 
     def get_params(self):
         return [self.W, self.b]
@@ -127,8 +131,8 @@ class HiddenBlockLayer(HiddenLayer):
             activation=T.tanh,
             name='HiddenBlockLayer',
             rng=None,
-            params=None,
-            param_map=None
+            l_params=None,
+            l_param_map=None
     ):
         assert(
             type(n_in) == tuple
@@ -193,10 +197,15 @@ class HiddenBlockLayer(HiddenLayer):
 
         self._setup_parameters(W_val, b_val)
 
-        if params is not None:
-            assert(param_map is not None)
-        self.l_params = params
-        self.l_param_map = param_map
+        if l_params is not None:
+            assert(l_param_map is not None)
+        self.l_params = l_params
+        self.l_param_map = l_param_map
+
+    def __str__(self):
+        return ("n_in: %d (%d units) , n_out: %d (%d units)"
+               % (self.n_in, self.n_units_per_in, self.n_out, self.n_units_per_out))
+
 
     def output(self, x):
         if self.l_params is None:
