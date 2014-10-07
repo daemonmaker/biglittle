@@ -45,21 +45,8 @@ class HiddenLayer(object):
         else:
             self.rng = rng
 
-        # Setup parameters
-        bound = np.sqrt(6. / (n_in + n_out))
-        W_val = np.asarray(self.rng.uniform(
-            low=-bound,
-            high=bound,
-            size=(
-                self.n_in,
-                self.n_out
-            )
-        ), dtype=config.floatX)
-        #W_val = np.ones((self.n_in, self.n_out), dtype=config.floatX)
-
-        b_val = np.zeros((self.n_out,)).astype(config.floatX)
-
-        self._setup_parameters(W_val, b_val)
+        W_val, b_val = self._init_parameters()
+        self._setup_shared_parameters(W_val, b_val)
 
         assert(k >= 0. and k <= 1.)
         if k > 0.:
@@ -82,7 +69,7 @@ class HiddenLayer(object):
     def __str__(self):
         return "n_in: %d, n_out: %d" % (self.n_in, self.n_out)
 
-    def _setup_parameters(self, W_val, b_val):
+    def _setup_shared_parameters(self, W_val, b_val):
         self.W = shared(
             W_val,
             name=str(self.name)+'_W'
@@ -92,6 +79,22 @@ class HiddenLayer(object):
             b_val,
             name=str(self.name)+'_b'
         )
+
+    def _init_parameters(self):
+        bound = np.sqrt(6. / (self.n_in + self.n_out))
+        W_val = np.asarray(self.rng.uniform(
+            low=-bound,
+            high=bound,
+            size=(
+                self.n_in,
+                self.n_out
+            )
+        ), dtype=config.floatX)
+        #W_val = np.ones((self.n_in, self.n_out), dtype=config.floatX)
+
+        b_val = np.zeros((self.n_out,)).astype(config.floatX)
+
+        return W_val, b_val
 
     def get_params(self):
         return [self.W, self.b]
@@ -139,6 +142,9 @@ class HiddenBlockLayer(HiddenLayer):
             and type(n_out) == tuple
         )
 
+        self.n_units_per_in = n_in[1]
+        self.n_units_per_out = n_out[1]
+
         super(
             HiddenBlockLayer,
             self
@@ -157,13 +163,19 @@ class HiddenBlockLayer(HiddenLayer):
             and n_out[1] > 0
         )
 
-        self.n_units_per_in = n_in[1]
-        self.n_units_per_out = n_out[1]
-
-        # Setup parameters
         self.in_idxs = in_idxs
         self.out_idxs = out_idxs
 
+        if l_params is not None:
+            assert(l_param_map is not None)
+        self.l_params = l_params
+        self.l_param_map = l_param_map
+
+    def __str__(self):
+        return ("n_in: %d (%d units) , n_out: %d (%d units)"
+               % (self.n_in, self.n_units_per_in, self.n_out, self.n_units_per_out))
+
+    def _init_parameters(self):
         inputSize = self.n_in*self.n_units_per_in
         outputSize = self.n_out*self.n_units_per_out
 
@@ -195,17 +207,7 @@ class HiddenBlockLayer(HiddenLayer):
             self.n_units_per_out
         ).astype(config.floatX)
 
-        self._setup_parameters(W_val, b_val)
-
-        if l_params is not None:
-            assert(l_param_map is not None)
-        self.l_params = l_params
-        self.l_param_map = l_param_map
-
-    def __str__(self):
-        return ("n_in: %d (%d units) , n_out: %d (%d units)"
-               % (self.n_in, self.n_units_per_in, self.n_out, self.n_units_per_out))
-
+        return W_val, b_val
 
     def output(self, x):
         if self.l_params is None:
