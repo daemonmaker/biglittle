@@ -20,78 +20,8 @@ from layer import HiddenLayer, HiddenRandomBlockLayer
 from timing_stats import TimingStats as TS
 
 
-def build_big_model(parameters):
-    layers = []
-    for i, params in enumerate(parameters):
-        params['batch_size'] = batch_size
-        if 'name' not in params.keys():
-            params['name'] = 'b_layer_%d' % i
-        if 'in_idxs' not in params.keys():
-            params['in_idxs'] = layers[-1].out_idxs
-        layers.append(HiddenRandomBlockLayer(**params))
-
-    return layers
-
-
-class MNIST():
-    def __init__(self):
-        dataset = 'mnist.pkl.gz'
-        datasets = load_data(dataset, True)
-
-        self.train_set_x, self.train_set_y = datasets[0]
-        self.valid_set_x, self.valid_set_y = datasets[1]
-        self.test_set_x, self.test_set_y = datasets[2]
-
-        self.n_train_batches = self.train_set_x.get_value(
-            borrow=True
-        ).shape[0] / batch_size
-        self.n_valid_batches = self.valid_set_x.get_value(
-            borrow=True
-        ).shape[0] / batch_size
-        self.n_test_batches = self.test_set_x.get_value(
-            borrow=True
-        ).shape[0] / batch_size
-
-
-def train(
-        rng,
-        batch_size,
-        learning_rate,
-        n_hids,
-        k_per=0.05,
-        n_epochs=1000,
-        L1_reg=0.0,
-        L2_reg=0.0001,
-        zero_last_layer_params=False,
-):
-    def summarize_rates():
-        print "Learning rate: ", learning_rate.rate
-
-    b_learning_rate = shared(
-        np.array(learning_rate.rate, dtype=config.floatX),
-        name='learning_rate'
-    )
-
-    index = T.lscalar('index')
-    b_x = T.tensor3('b_x', dtype=config.floatX)
-    y = T.ivector('y')
-
-    print "Loading Data"
-    print "... MNIST"
-    data = MNIST()
-
-    print "Building models"
+def setup_mode_parameters(data, k_per, n_out, n_units_per):
     print "... Building layers"
-    # Create network structure
-    x_size = data.train_set_x.shape[2].eval()
-    y_size = data.train_set_y.shape[0].eval()
-    n_in = x_size
-    n_units_per = 20
-    n_out = n_hids
-    l_params = None
-
-    k = int(n_out*k_per)
-    print "k_per: %d, k: %d" % (k_per, k)
 
     # Shared variable used for always activating one block in a layer as in the
     # input and output layer
@@ -101,9 +31,9 @@ def train(
     )
 
     hidden_dims = (n_out, n_units_per)
-    parameters = [
+    return [
         {
-            'n_in': (1, x_size),
+            'n_in': (1, data.train_set_x.shape[2].eval()),
             'n_out': hidden_dims,
             'in_idxs': one_block_idxs,
             'k': k_per,
@@ -135,18 +65,66 @@ def train(
             'activation': None,
         }
     ]
-    b_layers = build_big_model(parameters)
+
+
+class MNIST():
+    def __init__(self):
+        dataset = 'mnist.pkl.gz'
+        datasets = load_data(dataset, True)
+
+        self.train_set_x, self.train_set_y = datasets[0]
+        self.valid_set_x, self.valid_set_y = datasets[1]
+        self.test_set_x, self.test_set_y = datasets[2]
+
+        self.n_train_batches = self.train_set_x.get_value(
+            borrow=True
+        ).shape[0] / batch_size
+        self.n_valid_batches = self.valid_set_x.get_value(
+            borrow=True
+        ).shape[0] / batch_size
+        self.n_test_batches = self.test_set_x.get_value(
+            borrow=True
+        ).shape[0] / batch_size
+
+
+def build_big_model(
+        data,
+        parameters,
+        rng,
+        batch_size,
+        learning_rate,
+        n_hids,
+        k_per=0.05,
+        n_epochs=1000,
+        L1_reg=0.0,
+        L2_reg=0.0001,
+        zero_last_layer_params=False,
+):
+    index = T.lscalar('index')
+    input = T.tensor3('input', dtype=config.floatX)
+    y = T.ivector('y')
+
+    print "Building models"
+    # Create network structure
+
+    b_layers = []
+    for i, params in enumerate(parameters):
+        params['batch_size'] = batch_size
+        if 'name' not in params.keys():
+            params['name'] = 'b_layer_%d' % i
+        if 'in_idxs' not in params.keys():
+            params['in_idxs'] = b_layers[-1].out_idxs
+        new_layer = HiddenRandomBlockLayer(**params)
+        print new_layer
+        b_layers.append(new_layer)
+
     if zero_last_layer_params:
         b_layers[-1].W.set_value(0*b_layers[-1].W.get_value())
         b_layers[-1].b.set_value(0*b_layers[-1].b.get_value())
 
-
-    for layer in b_layers:
-        print layer
-
     print "... Building top active updates"
     top_active = []
-    b_activation = b_x
+    b_activation = input
     b_activations = [b_activation]
     for i in range(len(b_layers)):
         b_activation = b_layers[i].output(b_activation)
@@ -193,61 +171,57 @@ def train(
                 consider_constant=consider_constants
             )
             b_grads.append(b_gparam)
-            b_param_updates.append((param, param - b_learning_rate*b_gparam))
-
-        #if b_layers[i].l_params is not None:
-            #for param in b_layers[i].l_params:
-                #l_gparam = T.grad(
-                #    b_cost,
-                #    param
-                #)
-                #l_velocity = shared(
-                #    np.zeros_like(param.get_value()),
-                #    param.name + '_velocity'
-                #)
-                #b_param_updates.append((
-                #    l_velocity, momentum*l_velocity - b_learning_rate*l_gparam
-                #))
-                #l_grads.append(l_gparam)
-                #b_param_updates.append((param, param + l_velocity))
-                #b_param_updates.append((
-                #    param, param - 0.0001*l_gparam
-                #))
+            b_param_updates.append((param, param - learning_rate*b_gparam))
 
     print "... Compiling big net train function"
     b_updates = b_param_updates
 
-    b_train_model = function(
+    train_model = function(
         [index],
         [b_cost],
         updates=b_updates,
         givens={
-            b_x: data.train_set_x[index*batch_size:(index+1)*batch_size],
+            input: data.train_set_x[index*batch_size:(index+1)*batch_size],
             y: data.train_set_y[index*batch_size:(index+1)*batch_size]
         }
     )
 
     print "... Compiling big net test function"
-    b_test_model = function(
+    test_model = function(
         [index],
         b_error,
         givens={
-            b_x: data.test_set_x[index*batch_size:(index+1)*batch_size],
+            input: data.test_set_x[index*batch_size:(index+1)*batch_size],
             y: data.test_set_y[index*batch_size:(index+1)*batch_size]
         }
     )
 
     print "... Compiling big net validate function"
-    b_validate_model = function(
+    validate_model = function(
         [index],
         b_error,
         givens={
-            b_x: data.valid_set_x[index*batch_size:(index+1)*batch_size],
+            input: data.valid_set_x[index*batch_size:(index+1)*batch_size],
             y: data.valid_set_y[index*batch_size:(index+1)*batch_size]
         }
     )
 
-    print "Training"
+    return {
+        'train_model': train_model,
+        'test_model': test_model,
+        'validate_model': validate_model
+    }
+
+
+def train(
+        train_model,
+        test_model,
+        validate_model,
+        learning_rate,
+        shared_learning_rate
+):
+    def summarize_rates():
+        print "Learning rate: ", learning_rate.rate
 
     # early-stopping parameters
     patience = 10000  # look as this many examples regardless
@@ -286,7 +260,7 @@ def train(
         ts.start('epoch')
         for minibatch_index in xrange(data.n_train_batches):
             ts_b.start('train')
-            minibatch_avg_cost_b = b_train_model(minibatch_index)
+            minibatch_avg_cost_b = train_model(minibatch_index)
             ts_b.end('train')
             #print "0: ", b_layers[-5].in_idxs.get_value()
             #print "1: ", b_layers[-4].in_idxs.get_value()
@@ -322,7 +296,7 @@ def train(
                 summary = ('epoch %i, minibatch %i/%i'
                            % (epoch, minibatch_index + 1, data.n_train_batches))
 
-                validation_losses_b = [b_validate_model(i) for i
+                validation_losses_b = [validate_model(i) for i
                                        in xrange(data.n_valid_batches)]
                 this_validation_loss_b = np.mean(validation_losses_b)
                 #this_validation_loss_b = 0
@@ -347,7 +321,7 @@ def train(
                     best_iter = iter
 
                     # test it on the test set
-                    test_losses_b = [b_test_model(i) for i
+                    test_losses_b = [test_model(i) for i
                                      in xrange(data.n_test_batches)]
                     test_score_b = np.mean(test_losses_b)
                     #test_score_b = 0
@@ -360,7 +334,7 @@ def train(
 
                 learning_rate.update()
 
-                b_learning_rate.set_value(learning_rate.rate)
+                shared_learning_rate.set_value(learning_rate.rate)
 
                 summarize_rates()
 
@@ -380,6 +354,7 @@ def train(
 
 
 if __name__ == '__main__':
+    build_model_func = build_big_model
     rng = np.random.RandomState()
     batch_size = 10
     n_epochs = 1000
@@ -387,21 +362,43 @@ if __name__ == '__main__':
     n_hids_len = 5
     n_hids = (pow(10, y) for y in range(2, 2+n_hids_len))
     n_hids = (25,)
+    n_units_per = 20
     k_per = 1
+
+    print "Loading Data"
+    print "... MNIST"
+    data = MNIST()
 
     epoch_times = np.zeros((n_hids_len, 1))
     counter = 0
     for n_hid in n_hids:
         try:
-            b_epoch_time = train(
+            shared_learning_rate = shared(
+                np.array(learning_rate.rate, dtype=config.floatX),
+                name='learning_rate'
+            )
+
+            k = int(n_hid*k_per)
+            print "k_per: %d, k: %d" % (k_per, k)
+
+            models = build_model_func(
+                data,
+                setup_mode_parameters(data, k_per, n_hid, n_units_per),
                 rng,
                 batch_size=batch_size,
-                learning_rate=learning_rate,
+                learning_rate=shared_learning_rate,
                 n_hids=n_hid,
                 k_per=k_per,
                 n_epochs=n_epochs,
                 #L1_reg=0.0001,
                 L2_reg=0.0001,
+            )
+
+            print "Training"
+            b_epoch_tim = train(
+                learning_rate=learning_rate,
+                shared_learning_rate=shared_learning_rate,
+                **models
             )
         except MemoryError:
             b_epoch_time = -1
