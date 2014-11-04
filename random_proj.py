@@ -1,3 +1,5 @@
+#! /usr/bin/env python
+
 import ipdb
 import time
 from datetime import datetime
@@ -18,16 +20,49 @@ from layer import HiddenLayer, HiddenRandomBlockLayer
 from timing_stats import TimingStats as TS
 
 
+def build_big_model(parameters):
+    layers = []
+    for i, params in enumerate(parameters):
+        params['batch_size'] = batch_size
+        if 'name' not in params.keys():
+            params['name'] = 'b_layer_%d' % i
+        if 'in_idxs' not in params.keys():
+            params['in_idxs'] = layers[-1].out_idxs
+        layers.append(HiddenRandomBlockLayer(**params))
+
+    return layers
+
+
+class MNIST():
+    def __init__(self):
+        dataset = 'mnist.pkl.gz'
+        datasets = load_data(dataset, True)
+
+        self.train_set_x, self.train_set_y = datasets[0]
+        self.valid_set_x, self.valid_set_y = datasets[1]
+        self.test_set_x, self.test_set_y = datasets[2]
+
+        self.n_train_batches = self.train_set_x.get_value(
+            borrow=True
+        ).shape[0] / batch_size
+        self.n_valid_batches = self.valid_set_x.get_value(
+            borrow=True
+        ).shape[0] / batch_size
+        self.n_test_batches = self.test_set_x.get_value(
+            borrow=True
+        ).shape[0] / batch_size
+
+
 def train(
-    rng,
-    batch_size,
-    learning_rate,
-    n_hids,
-    k_per=0.05,
-    n_epochs=1000,
-    L1_reg=0.0,
-    L2_reg=0.0001,
-    zero_last_layer_params=False,
+        rng,
+        batch_size,
+        learning_rate,
+        n_hids,
+        k_per=0.05,
+        n_epochs=1000,
+        L1_reg=0.0,
+        L2_reg=0.0001,
+        zero_last_layer_params=False,
 ):
     def summarize_rates():
         print "Learning rate: ", learning_rate.rate
@@ -43,26 +78,16 @@ def train(
 
     print "Loading Data"
     print "... MNIST"
-    dataset = 'mnist.pkl.gz'
-    datasets = load_data(dataset, True)
-
-    train_set_x, train_set_y = datasets[0]
-    valid_set_x, valid_set_y = datasets[1]
-    test_set_x, test_set_y = datasets[2]
-
-    n_train_batches = train_set_x.get_value(borrow=True).shape[0] / batch_size
-    n_valid_batches = valid_set_x.get_value(borrow=True).shape[0] / batch_size
-    n_test_batches = test_set_x.get_value(borrow=True).shape[0] / batch_size
+    data = MNIST()
 
     print "Building models"
     print "... Building layers"
     # Create network structure
-    x_size = train_set_x.shape[2].eval()
-    y_size = train_set_y.shape[0].eval()
+    x_size = data.train_set_x.shape[2].eval()
+    y_size = data.train_set_y.shape[0].eval()
     n_in = x_size
     n_units_per = 20
     n_out = n_hids
-    b_layers = []
     l_params = None
 
     k = int(n_out*k_per)
@@ -75,68 +100,42 @@ def train(
         name='one_block_idxs'
     )
 
-    b_layers.append(
-        HiddenRandomBlockLayer(
-            (1, x_size),
-            (n_out, n_units_per),
-            in_idxs=one_block_idxs,
-            batch_size=batch_size,
-            k=k_per,
-            activation=T.tanh,
-            name='b_layer_' + str(len(b_layers)),
-        )
-    )
-
-    n_in = n_out
-    b_layers.append(
-        HiddenRandomBlockLayer(
-            (n_in, n_units_per),
-            (n_out, n_units_per),
-            in_idxs=b_layers[-1].out_idxs,
-            batch_size=batch_size,
-            k=k_per,
-            activation=T.tanh,
-            name='b_layer_' + str(len(b_layers)),
-        )
-    )
-
-    b_layers.append(
-        HiddenRandomBlockLayer(
-            (n_in, n_units_per),
-            (n_out, n_units_per),
-            in_idxs=b_layers[-1].out_idxs,
-            batch_size=batch_size,
-            k=k_per,
-            activation=T.tanh,
-            name='b_layer_' + str(len(b_layers)),
-        )
-    )
-
-    b_layers.append(
-        HiddenRandomBlockLayer(
-            (n_in, n_units_per),
-            (n_out, n_units_per),
-            in_idxs=b_layers[-1].out_idxs,
-            batch_size=batch_size,
-            k=k_per,
-            activation=T.tanh,
-            name='b_layer_' + str(len(b_layers)),
-        )
-    )
-
-    n_out = 10
-    b_layers.append(
-        HiddenRandomBlockLayer(
-            (n_in, n_units_per),
-            (1, n_out),
-            in_idxs=b_layers[-1].out_idxs,
-            out_idxs=one_block_idxs,
-            batch_size=batch_size,
-            k = 1.,
-            activation=None,
-            name='b_layer_' + str(len(b_layers)),
-        )
-    )
+    hidden_dims = (n_out, n_units_per)
+    parameters = [
+        {
+            'n_in': (1, x_size),
+            'n_out': hidden_dims,
+            'in_idxs': one_block_idxs,
+            'k': k_per,
+            'activation': T.tanh,
+        },
+        {
+            'n_in': hidden_dims,
+            'n_out': hidden_dims,
+            'k': k_per,
+            'activation': T.tanh,
+        },
+        #{
+        #     'n_in': hidden_dims,
+        #     'n_out': hidden_dims,
+        #     'k': k_per,
+        #     'activation': T.tanh,
+        # },
+        # {
+        #     'n_in': hidden_dims,
+        #     'n_out': hidden_dims,
+        #     'k': k_per,
+        #     'activation': T.tanh,
+        # },
+        {
+            'n_in': hidden_dims,
+            'n_out': (1, 10),
+            'out_idxs': one_block_idxs,
+            'k': 1.,
+            'activation': None,
+        }
+    ]
+    b_layers = build_big_model(parameters)
     if zero_last_layer_params:
         b_layers[-1].W.set_value(0*b_layers[-1].W.get_value())
         b_layers[-1].b.set_value(0*b_layers[-1].b.get_value())
@@ -223,8 +222,8 @@ def train(
         [b_cost],
         updates=b_updates,
         givens={
-            b_x: train_set_x[index*batch_size:(index+1)*batch_size],
-            y: train_set_y[index*batch_size:(index+1)*batch_size]
+            b_x: data.train_set_x[index*batch_size:(index+1)*batch_size],
+            y: data.train_set_y[index*batch_size:(index+1)*batch_size]
         }
     )
 
@@ -233,8 +232,8 @@ def train(
         [index],
         b_error,
         givens={
-            b_x: test_set_x[index*batch_size:(index+1)*batch_size],
-            y: test_set_y[index*batch_size:(index+1)*batch_size]
+            b_x: data.test_set_x[index*batch_size:(index+1)*batch_size],
+            y: data.test_set_y[index*batch_size:(index+1)*batch_size]
         }
     )
 
@@ -243,8 +242,8 @@ def train(
         [index],
         b_error,
         givens={
-            b_x: valid_set_x[index*batch_size:(index+1)*batch_size],
-            y: valid_set_y[index*batch_size:(index+1)*batch_size]
+            b_x: data.valid_set_x[index*batch_size:(index+1)*batch_size],
+            y: data.valid_set_y[index*batch_size:(index+1)*batch_size]
         }
     )
 
@@ -256,7 +255,7 @@ def train(
                            # found
     improvement_threshold = 0.995  # a relative improvement of this much is
                                    # considered significant
-    validation_frequency = min(n_train_batches, patience / 2)
+    validation_frequency = min(data.n_train_batches, patience / 2)
                                   # go through this many
                                   # minibatche before checking the network
                                   # on the validation set; in this case we
@@ -285,15 +284,15 @@ def train(
     while (epoch < n_epochs) and (not done_looping):
         epoch = epoch + 1
         ts.start('epoch')
-        for minibatch_index in xrange(n_train_batches):
+        for minibatch_index in xrange(data.n_train_batches):
             ts_b.start('train')
             minibatch_avg_cost_b = b_train_model(minibatch_index)
             ts_b.end('train')
-            print "0: ", b_layers[-5].in_idxs.get_value()
-            print "1: ", b_layers[-4].in_idxs.get_value()
-            print "2: ", b_layers[-3].in_idxs.get_value()
-            print "3: ", b_layers[-2].in_idxs.get_value()
-            print "4: ", b_layers[-1].in_idxs.get_value()
+            #print "0: ", b_layers[-5].in_idxs.get_value()
+            #print "1: ", b_layers[-4].in_idxs.get_value()
+            #print "2: ", b_layers[-3].in_idxs.get_value()
+            #print "3: ", b_layers[-2].in_idxs.get_value()
+            #print "4: ", b_layers[-1].in_idxs.get_value()
 
             minibatch_avg_cost_b = minibatch_avg_cost_b[0]
             accum_b = accum_b + minibatch_avg_cost_b
@@ -305,7 +304,7 @@ def train(
             #print "C: ", np.abs(np.array(minibatch_avg_cost_b[1])).sum(), np.abs(np.array(minibatch_avg_cost_b[2])).sum(), np.abs(np.array(minibatch_avg_cost_b[3])).sum(), np.abs(np.array(minibatch_avg_cost_b[4])).sum()
 
             # iteration number
-            iter = (epoch - 1) * n_train_batches + minibatch_index
+            iter = (epoch - 1) * data.n_train_batches + minibatch_index
 
             if (iter + 1) % validation_frequency == 0:
                 ts.end('epoch')
@@ -321,10 +320,10 @@ def train(
 
                 # compute zero-one loss on validation set
                 summary = ('epoch %i, minibatch %i/%i'
-                           % (epoch, minibatch_index + 1, n_train_batches))
+                           % (epoch, minibatch_index + 1, data.n_train_batches))
 
                 validation_losses_b = [b_validate_model(i) for i
-                                       in xrange(n_valid_batches)]
+                                       in xrange(data.n_valid_batches)]
                 this_validation_loss_b = np.mean(validation_losses_b)
                 #this_validation_loss_b = 0
                 b_summary = ('big validation error %f %% '
@@ -349,7 +348,7 @@ def train(
 
                     # test it on the test set
                     test_losses_b = [b_test_model(i) for i
-                                     in xrange(n_test_batches)]
+                                     in xrange(data.n_test_batches)]
                     test_score_b = np.mean(test_losses_b)
                     #test_score_b = 0
                     b_summary = 'big: %f' % (test_score_b * 100.)
@@ -357,7 +356,7 @@ def train(
                     print ('     epoch %i, minibatch %i/%i,'
                            ' test error of best model %s'
                            % (epoch, minibatch_index + 1,
-                              n_train_batches, b_summary))
+                              data.n_train_batches, b_summary))
 
                 learning_rate.update()
 
@@ -388,7 +387,7 @@ if __name__ == '__main__':
     n_hids_len = 5
     n_hids = (pow(10, y) for y in range(2, 2+n_hids_len))
     n_hids = (25,)
-    k_per = 0.1
+    k_per = 1
 
     epoch_times = np.zeros((n_hids_len, 1))
     counter = 0
