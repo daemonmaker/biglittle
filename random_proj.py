@@ -87,48 +87,49 @@ class MNIST():
         ).shape[0] / batch_size
 
 
+def build_small_model(
+        data,
+        parameters,
+        batch_size,
+        zero_last_layer_params=False,
+):
+    pass
+
+
 def build_big_model(
         data,
         parameters,
-        rng,
+        index,
+        input,
+        y,
         batch_size,
-        learning_rate,
-        n_hids,
-        k_per=0.05,
-        n_epochs=1000,
-        L1_reg=0.0,
-        L2_reg=0.0001,
         zero_last_layer_params=False,
 ):
-    index = T.lscalar('index')
-    input = T.tensor3('input', dtype=config.floatX)
-    y = T.ivector('y')
-
     print "Building models"
     # Create network structure
 
-    b_layers = []
+    layers = []
     for i, params in enumerate(parameters):
         params['batch_size'] = batch_size
         if 'name' not in params.keys():
             params['name'] = 'b_layer_%d' % i
         if 'in_idxs' not in params.keys():
-            params['in_idxs'] = b_layers[-1].out_idxs
+            params['in_idxs'] = layers[-1].out_idxs
         new_layer = HiddenRandomBlockLayer(**params)
         print new_layer
-        b_layers.append(new_layer)
+        layers.append(new_layer)
 
     if zero_last_layer_params:
-        b_layers[-1].W.set_value(0*b_layers[-1].W.get_value())
-        b_layers[-1].b.set_value(0*b_layers[-1].b.get_value())
+        layers[-1].W.set_value(0*layers[-1].W.get_value())
+        layers[-1].b.set_value(0*layers[-1].b.get_value())
 
     print "... Building top active updates"
     top_active = []
-    b_activation = input
-    b_activations = [b_activation]
-    for i in range(len(b_layers)):
-        b_activation = b_layers[i].output(b_activation)
-        b_activations.append(b_activation)
+    activation = input
+    activations = [activation]
+    for i in range(len(layers)):
+        activation = layers[i].output(activation)
+        activations.append(activation)
         #top_active.append((
         #    top_actives[i],
         #    T.argsort(T.abs_(l_activation))[:, :l_layers[i].k]
@@ -138,48 +139,59 @@ def build_big_model(
     # T.nnet.softmax takes a matrix not a tensor so we only calculate the
     # linear component at the last layer and here we reshape and then
     # apply the softmax
-    #b_activation = T.nnet.softmax(((b_activation*b_activation)**2).sum(axis=2))
-    #b_activation = relu_softmax(((b_activation*b_activation)**2).sum(axis=2))
-    #b_activation = T.nnet.softmax(T.mean(b_activation, axis=2))
-    #b_activation = relu_softmax(T.mean(b_activation, axis=2))
-    #b_activation = T.nnet.softmax(T.max(b_activation, axis=2))
-    #b_activation = relu_softmax(T.max(b_activation, axis=2))
-    b_shp = b_activation.shape
-    #b_activation = relu_softmax(b_activation.reshape((b_shp[0], b_shp[2])))
-    b_activation = T.nnet.softmax(b_activation.reshape((b_shp[0], b_shp[2])))
-    b_activations.append(b_activation)
-    b_cost = add_regularization(
-        b_layers,
-        b_layers[-1].cost(b_activation, y),
+    #activation = T.nnet.softmax(((activation*activation)**2).sum(axis=2))
+    #activation = relu_softmax(((activation*activation)**2).sum(axis=2))
+    #activation = T.nnet.softmax(T.mean(activation, axis=2))
+    #activation = relu_softmax(T.mean(activation, axis=2))
+    #activation = T.nnet.softmax(T.max(activation, axis=2))
+    #activation = relu_softmax(T.max(activation, axis=2))
+    shp = activation.shape
+    #activation = relu_softmax(activation.reshape((shp[0], shp[2])))
+    activation = T.nnet.softmax(activation.reshape((shp[0], shp[2])))
+    activations.append(activation)
+
+    return (layers, activation)
+
+
+def build_functions(
+        layers,
+        activation,
+        learning_rate,
+        L1_reg=0.0,
+        L2_reg=0.0001
+):
+    cost = add_regularization(
+        layers,
+        layers[-1].cost(activation, y),
         L1_reg,
         L2_reg
     )
-    b_error = b_layers[-1].error(b_activation, y)
+    error = layers[-1].error(activation, y)
 
     print "... Building parameter updates"
     consider_constants = []
-    for i in range(len(b_layers)):
-        for param in b_layers[i].params:
-            consider_constants += [b_layers[i].in_idxs, b_layers[i].out_idxs]
-    b_grads = []
-    b_param_updates = []
-    for i in range(len(b_layers)):
-        for param in b_layers[i].params:
-            b_gparam = T.grad(
-                b_cost,
+    for i in range(len(layers)):
+        for param in layers[i].params:
+            consider_constants += [layers[i].in_idxs, layers[i].out_idxs]
+    grads = []
+    param_updates = []
+    for i in range(len(layers)):
+        for param in layers[i].params:
+            gparam = T.grad(
+                cost,
                 param,
                 consider_constant=consider_constants
             )
-            b_grads.append(b_gparam)
-            b_param_updates.append((param, param - learning_rate*b_gparam))
+            grads.append(gparam)
+            param_updates.append((param, param - learning_rate*gparam))
 
     print "... Compiling big net train function"
-    b_updates = b_param_updates
+    updates = param_updates
 
     train_model = function(
         [index],
-        [b_cost],
-        updates=b_updates,
+        [cost],
+        updates=updates,
         givens={
             input: data.train_set_x[index*batch_size:(index+1)*batch_size],
             y: data.train_set_y[index*batch_size:(index+1)*batch_size]
@@ -189,7 +201,7 @@ def build_big_model(
     print "... Compiling big net test function"
     test_model = function(
         [index],
-        b_error,
+        error,
         givens={
             input: data.test_set_x[index*batch_size:(index+1)*batch_size],
             y: data.test_set_y[index*batch_size:(index+1)*batch_size]
@@ -199,7 +211,7 @@ def build_big_model(
     print "... Compiling big net validate function"
     validate_model = function(
         [index],
-        b_error,
+        error,
         givens={
             input: data.valid_set_x[index*batch_size:(index+1)*batch_size],
             y: data.valid_set_y[index*batch_size:(index+1)*batch_size]
@@ -218,7 +230,8 @@ def train(
         test_model,
         validate_model,
         learning_rate,
-        shared_learning_rate
+        shared_learning_rate,
+        n_epochs=1000
 ):
     def summarize_rates():
         print "Learning rate: ", learning_rate.rate
@@ -262,19 +275,19 @@ def train(
             ts_b.start('train')
             minibatch_avg_cost_b = train_model(minibatch_index)
             ts_b.end('train')
-            #print "0: ", b_layers[-5].in_idxs.get_value()
-            #print "1: ", b_layers[-4].in_idxs.get_value()
-            #print "2: ", b_layers[-3].in_idxs.get_value()
-            #print "3: ", b_layers[-2].in_idxs.get_value()
-            #print "4: ", b_layers[-1].in_idxs.get_value()
+            #print "0: ", layers[-5].in_idxs.get_value()
+            #print "1: ", layers[-4].in_idxs.get_value()
+            #print "2: ", layers[-3].in_idxs.get_value()
+            #print "3: ", layers[-2].in_idxs.get_value()
+            #print "4: ", layers[-1].in_idxs.get_value()
 
             minibatch_avg_cost_b = minibatch_avg_cost_b[0]
             accum_b = accum_b + minibatch_avg_cost_b
 
             #print "minibatch_avg_cost: " + str(minibatch_avg_cost) + " minibatch_avg_cost_b: " + str(minibatch_avg_cost_b)
-            #print l_layers[0].W.get_value().sum(), l_layers[1].W.get_value().sum(), b_layers[0].W.get_value().sum(), b_layers[1].W.get_value().sum()
-            #print "A: ", np.max(np.abs(b_layers[0].W.get_value())), np.max(np.abs(b_layers[0].b.get_value())), np.max(np.abs(b_layers[1].W.get_value())), np.max(np.abs(b_layers[1].b.get_value()))
-            #print "B: ", np.abs(b_layers[0].W.get_value()).sum(), np.abs(b_layers[0].b.get_value()).sum(), np.abs(b_layers[1].W.get_value()).sum(), np.abs(b_layers[1].b.get_value()).sum()
+            #print l_layers[0].W.get_value().sum(), l_layers[1].W.get_value().sum(), layers[0].W.get_value().sum(), layers[1].W.get_value().sum()
+            #print "A: ", np.max(np.abs(layers[0].W.get_value())), np.max(np.abs(layers[0].b.get_value())), np.max(np.abs(layers[1].W.get_value())), np.max(np.abs(layers[1].b.get_value()))
+            #print "B: ", np.abs(layers[0].W.get_value()).sum(), np.abs(layers[0].b.get_value()).sum(), np.abs(layers[1].W.get_value()).sum(), np.abs(layers[1].b.get_value()).sum()
             #print "C: ", np.abs(np.array(minibatch_avg_cost_b[1])).sum(), np.abs(np.array(minibatch_avg_cost_b[2])).sum(), np.abs(np.array(minibatch_avg_cost_b[3])).sum(), np.abs(np.array(minibatch_avg_cost_b[4])).sum()
 
             # iteration number
@@ -354,6 +367,10 @@ def train(
 
 
 if __name__ == '__main__':
+    index = T.lscalar('index')
+    input = T.tensor3('input', dtype=config.floatX)
+    y = T.ivector('y')
+
     build_model_func = build_big_model
     rng = np.random.RandomState()
     batch_size = 10
@@ -381,15 +398,24 @@ if __name__ == '__main__':
             k = int(n_hid*k_per)
             print "k_per: %d, k: %d" % (k_per, k)
 
-            models = build_model_func(
-                data,
-                setup_mode_parameters(data, k_per, n_hid, n_units_per),
-                rng,
+            layers, activation = build_model_func(
+                data=data,
+                parameters=setup_mode_parameters(
+                    data,
+                    k_per,
+                    n_hid,
+                    n_units_per
+                ),
+                input=input,
+                index=index,
+                y=y,
                 batch_size=batch_size,
+            )
+
+            models = build_functions(
+                layers,
+                activation,
                 learning_rate=shared_learning_rate,
-                n_hids=n_hid,
-                k_per=k_per,
-                n_epochs=n_epochs,
                 #L1_reg=0.0001,
                 L2_reg=0.0001,
             )
@@ -398,6 +424,7 @@ if __name__ == '__main__':
             b_epoch_tim = train(
                 learning_rate=learning_rate,
                 shared_learning_rate=shared_learning_rate,
+                n_epochs=n_epochs,
                 **models
             )
         except MemoryError:
