@@ -31,35 +31,66 @@ def setup_mode_parameters(data, k_per, n_out, n_units_per):
     )
 
     hidden_dims = (n_out, n_units_per)
+    total_hidden_dims = hidden_dims[0]*hidden_dims[1]
     return [
         {
-            'n_in': (1, data.train_set_x.shape[2].eval()),
-            'n_out': hidden_dims,
+            'l_dims': {
+                'n_in': data.train_set_x.shape[-1].eval(),
+                'n_out': total_hidden_dims
+            },
+            'b_dims': {
+                'n_in': (1, data.train_set_x.shape[-1].eval()),
+                'n_out': hidden_dims
+            },
             'in_idxs': one_block_idxs,
             'k': k_per,
             'activation': T.tanh,
         },
         {
-            'n_in': hidden_dims,
-            'n_out': hidden_dims,
+            'l_dims': {
+                'n_in': total_hidden_dims,
+                'n_out': total_hidden_dims
+            },
+            'b_dims': {
+                'n_in': hidden_dims,
+                'n_out': hidden_dims
+            },
             'k': k_per,
             'activation': T.tanh,
         },
-        #{
-        #     'n_in': hidden_dims,
-        #     'n_out': hidden_dims,
+        # {
+        #     'l_dims': {
+        #         'n_in': total_hidden_dims,
+        #         'n_out': total_hidden_dims
+        #     },
+        #     'b_dims': {
+        #         'n_in': hidden_dims,
+        #         'n_out': hidden_dims
+        #     },
         #     'k': k_per,
         #     'activation': T.tanh,
         # },
         # {
-        #     'n_in': hidden_dims,
-        #     'n_out': hidden_dims,
+        #     'l_dims': {
+        #         'n_in': total_hidden_dims,
+        #         'n_out': total_hidden_dims
+        #     },
+        #     'b_dims': {
+        #         'n_in': hidden_dims,
+        #         'n_out': hidden_dims
+        #     },
         #     'k': k_per,
         #     'activation': T.tanh,
         # },
         {
-            'n_in': hidden_dims,
-            'n_out': (1, 10),
+            'l_dims': {
+                'n_in': total_hidden_dims,
+                'n_out': 10
+            },
+            'b_dims': {
+                'n_in': hidden_dims,
+                'n_out': (1, 10)
+            },
             'out_idxs': one_block_idxs,
             'k': 1.,
             'activation': None,
@@ -68,9 +99,9 @@ def setup_mode_parameters(data, k_per, n_out, n_units_per):
 
 
 class MNIST():
-    def __init__(self):
+    def __init__(self, reshape_data=False):
         dataset = 'mnist.pkl.gz'
-        datasets = load_data(dataset, True)
+        datasets = load_data(dataset, reshape_data)
 
         self.train_set_x, self.train_set_y = datasets[0]
         self.valid_set_x, self.valid_set_y = datasets[1]
@@ -87,142 +118,246 @@ class MNIST():
         ).shape[0] / batch_size
 
 
-def build_small_model(
-        data,
-        parameters,
-        batch_size,
-        zero_last_layer_params=False,
-):
-    pass
+class Model(object):
+    def __init__(
+            self,
+            parameters,
+            batch_size,
+            learning_rate,
+            L1_reg=0.0,
+            L2_reg=0.0001,
+            zero_last_layer_params=False
+    ):
+        self.parameters = parameters
 
+        self.index = T.lscalar('index')
+        self.y = T.ivector('y')
 
-def build_big_model(
-        data,
-        parameters,
-        index,
-        input,
-        y,
-        batch_size,
-        zero_last_layer_params=False,
-):
-    print "Building models"
-    # Create network structure
+        assert(batch_size > 0)
+        self.batch_size = batch_size
 
-    layers = []
-    for i, params in enumerate(parameters):
-        params['batch_size'] = batch_size
-        if 'name' not in params.keys():
-            params['name'] = 'b_layer_%d' % i
-        if 'in_idxs' not in params.keys():
-            params['in_idxs'] = layers[-1].out_idxs
-        new_layer = HiddenRandomBlockLayer(**params)
-        print new_layer
-        layers.append(new_layer)
+        self.learning_rate = learning_rate
 
-    if zero_last_layer_params:
-        layers[-1].W.set_value(0*layers[-1].W.get_value())
-        layers[-1].b.set_value(0*layers[-1].b.get_value())
+        assert(L1_reg >= 0.)
+        self.L1_reg = L1_reg
 
-    print "... Building top active updates"
-    top_active = []
-    activation = input
-    activations = [activation]
-    for i in range(len(layers)):
-        activation = layers[i].output(activation)
-        activations.append(activation)
-        #top_active.append((
-        #    top_actives[i],
-        #    T.argsort(T.abs_(l_activation))[:, :l_layers[i].k]
-        #))
+        assert(L2_reg >= 0.)
+        self.L2_reg = L2_reg
 
-    print "... Building costs and errors"
-    # T.nnet.softmax takes a matrix not a tensor so we only calculate the
-    # linear component at the last layer and here we reshape and then
-    # apply the softmax
-    #activation = T.nnet.softmax(((activation*activation)**2).sum(axis=2))
-    #activation = relu_softmax(((activation*activation)**2).sum(axis=2))
-    #activation = T.nnet.softmax(T.mean(activation, axis=2))
-    #activation = relu_softmax(T.mean(activation, axis=2))
-    #activation = T.nnet.softmax(T.max(activation, axis=2))
-    #activation = relu_softmax(T.max(activation, axis=2))
-    shp = activation.shape
-    #activation = relu_softmax(activation.reshape((shp[0], shp[2])))
-    activation = T.nnet.softmax(activation.reshape((shp[0], shp[2])))
-    activations.append(activation)
+        print "... Building layers"
+        self.layers = self.build_layers()
 
-    return (layers, activation)
+        if zero_last_layer_params:
+            layers[-1].W.set_value(0*layers[-1].W.get_value())
+            layers[-1].b.set_value(0*layers[-1].b.get_value())
 
+        # Summarize layers
+        for layer in self.layers:
+            print layer
 
-def build_functions(
-        layers,
-        activation,
-        learning_rate,
-        L1_reg=0.0,
-        L2_reg=0.0001
-):
-    cost = add_regularization(
-        layers,
-        layers[-1].cost(activation, y),
-        L1_reg,
-        L2_reg
-    )
-    error = layers[-1].error(activation, y)
+    def build_layers(self):
+        raise NotImplementedError('build_layers')
 
-    print "... Building parameter updates"
-    consider_constants = []
-    for i in range(len(layers)):
-        for param in layers[i].params:
-            consider_constants += [layers[i].in_idxs, layers[i].out_idxs]
-    grads = []
-    param_updates = []
-    for i in range(len(layers)):
-        for param in layers[i].params:
-            gparam = T.grad(
-                cost,
-                param,
-                consider_constant=consider_constants
-            )
-            grads.append(gparam)
-            param_updates.append((param, param - learning_rate*gparam))
+    def calculate_activation(self):
+        raise NotImplementedError('calculate_activation')
 
-    print "... Compiling big net train function"
-    updates = param_updates
+    def convert_data(self):
+        raise NotImplementedError('convert_data')
 
-    train_model = function(
-        [index],
-        [cost],
-        updates=updates,
-        givens={
-            input: data.train_set_x[index*batch_size:(index+1)*batch_size],
-            y: data.train_set_y[index*batch_size:(index+1)*batch_size]
+    def build_functions(self):
+        layers = self.layers
+        input = self.input
+        activation = self.calculate_activation()
+        index = self.index
+        y = self.y
+        L1_reg = self.L1_reg
+        L2_reg = self.L2_reg
+
+        print "... Building costs"
+        cost = add_regularization(
+            layers,
+            layers[-1].cost(activation, y),
+            L1_reg,
+            L2_reg
+        )
+
+        print "... Building errors"
+        error = layers[-1].error(activation, y)
+
+        print "... Building parameter updates"
+        consider_constants = []
+        for layer in layers:
+            if hasattr(layer, 'in_idxs') and hasattr(layer, 'out_idxs'):
+                consider_constants += [layer.in_idxs, layer.out_idxs]
+
+        grads = []
+        param_updates = []
+        for i in range(len(layers)):
+            for param in layers[i].params:
+                gparam = T.grad(
+                    cost,
+                    param,
+                    consider_constant=consider_constants
+                )
+                grads.append(gparam)
+                param_updates.append(
+                    (param, param - self.learning_rate*gparam)
+                )
+
+        print "... Compiling train function"
+        updates = param_updates
+
+        train_model = function(
+            [index],
+            [cost],
+            updates=updates,
+            givens={
+                input: data.train_set_x[index*batch_size:(index+1)*batch_size],
+                y: data.train_set_y[index*batch_size:(index+1)*batch_size]
+            }
+        )
+
+        print "... Compiling test function"
+        test_model = function(
+            [index],
+            error,
+            givens={
+                input: data.test_set_x[index*batch_size:(index+1)*batch_size],
+                y: data.test_set_y[index*batch_size:(index+1)*batch_size]
+            }
+        )
+
+        print "... Compiling validate function"
+        validate_model = function(
+            [index],
+            error,
+            givens={
+                input: data.valid_set_x[index*batch_size:(index+1)*batch_size],
+                y: data.valid_set_y[index*batch_size:(index+1)*batch_size]
+            }
+        )
+
+        return {
+            'train_model': train_model,
+            'test_model': test_model,
+            'validate_model': validate_model
         }
-    )
 
-    print "... Compiling big net test function"
-    test_model = function(
-        [index],
-        error,
-        givens={
-            input: data.test_set_x[index*batch_size:(index+1)*batch_size],
-            y: data.test_set_y[index*batch_size:(index+1)*batch_size]
-        }
-    )
 
-    print "... Compiling big net validate function"
-    validate_model = function(
-        [index],
-        error,
-        givens={
-            input: data.valid_set_x[index*batch_size:(index+1)*batch_size],
-            y: data.valid_set_y[index*batch_size:(index+1)*batch_size]
-        }
-    )
+class BigModel(Model):
+    reshape_data = True
 
-    return {
-        'train_model': train_model,
-        'test_model': test_model,
-        'validate_model': validate_model
-    }
+    def __init__(
+            self,
+            data,
+            parameters,
+            batch_size,
+            learning_rate,
+            L1_reg=0.0,
+            L2_reg=0.0001,
+            zero_last_layer_params=False
+    ):
+        self.input = T.tensor3('input', dtype=config.floatX)
+
+        super(BigModel, self).__init__(
+            parameters,
+            batch_size,
+            learning_rate,
+            L1_reg,
+            L2_reg,
+            zero_last_layer_params
+        )
+
+    def build_layers(self):
+        layers = []
+        for i, params in enumerate(self.parameters):
+            constructor_params = {
+                'n_in': params['b_dims']['n_in'],
+                'n_out': params['b_dims']['n_out'],
+                'batch_size': batch_size,
+                'k': params['k'],
+                'activation': params['activation'],
+                'name': 'b_layer_%d' % i
+            }
+            if 'in_idxs' in params.keys():
+                constructor_params['in_idxs'] = params['in_idxs']
+            else:
+                constructor_params['in_idxs'] = layers[-1].out_idxs
+
+            layers.append(HiddenRandomBlockLayer(**constructor_params))
+
+        return layers
+
+    def calculate_activation(self):
+        print "... Calculating activation"
+        top_active = []
+        activation = self.input
+        for i in range(len(self.layers)):
+            activation = self.layers[i].output(activation)
+            #top_active.append((
+            #    top_actives[i],
+            #    T.argsort(T.abs_(l_activation))[:, :l_layers[i].k]
+            #))
+        self.top_active = top_active
+
+        # T.nnet.softmax takes a matrix not a tensor so we only calculate the
+        # linear component at the last layer and here we reshape and then
+        # apply the softmax
+        #activation = T.nnet.softmax(((activation*activation)**2).sum(axis=2))
+        #activation = relu_softmax(((activation*activation)**2).sum(axis=2))
+        #activation = T.nnet.softmax(T.mean(activation, axis=2))
+        #activation = relu_softmax(T.mean(activation, axis=2))
+        #activation = T.nnet.softmax(T.max(activation, axis=2))
+        #activation = relu_softmax(T.max(activation, axis=2))
+        shp = activation.shape
+        #activation = relu_softmax(activation.reshape((shp[0], shp[2])))
+        return T.nnet.softmax(activation.reshape((shp[0], shp[2])))
+
+
+class LittleModel(Model):
+    reshape_data = False
+
+    def __init__(
+            self,
+            data,
+            parameters,
+            batch_size,
+            learning_rate,
+            L1_reg=0.0,
+            L2_reg=0.0001,
+            zero_last_layer_params=False
+    ):
+        self.input = T.matrix('input', dtype=config.floatX)
+
+        super(LittleModel, self).__init__(
+            parameters,
+            batch_size,
+            learning_rate,
+            L1_reg,
+            L2_reg,
+            zero_last_layer_params
+        )
+
+    def build_layers(self):
+        layers = []
+        for i, params in enumerate(self.parameters):
+            constructor_params = {
+                'n_in': params['l_dims']['n_in'],
+                'n_out': params['l_dims']['n_out'],
+                'batch_size': batch_size,
+                'k': params['k'],
+                'activation': params['activation'],
+                'name': 'l_layer_%d' % i
+            }
+            layers.append(HiddenLayer(**constructor_params))
+
+        return layers
+
+    def calculate_activation(self):
+        activation = self.input
+        for layer in self.layers:
+            activation = layer.output(activation)
+        return T.nnet.softmax(activation)
 
 
 def train(
@@ -367,11 +502,8 @@ def train(
 
 
 if __name__ == '__main__':
-    index = T.lscalar('index')
-    input = T.tensor3('input', dtype=config.floatX)
-    y = T.ivector('y')
+    model_class = BigModel
 
-    build_model_func = build_big_model
     rng = np.random.RandomState()
     batch_size = 10
     n_epochs = 1000
@@ -384,7 +516,7 @@ if __name__ == '__main__':
 
     print "Loading Data"
     print "... MNIST"
-    data = MNIST()
+    data = MNIST(model_class.reshape_data)
 
     epoch_times = np.zeros((n_hids_len, 1))
     counter = 0
@@ -398,7 +530,8 @@ if __name__ == '__main__':
             k = int(n_hid*k_per)
             print "k_per: %d, k: %d" % (k_per, k)
 
-            layers, activation = build_model_func(
+            print "Building model"
+            model = model_class(
                 data=data,
                 parameters=setup_mode_parameters(
                     data,
@@ -406,32 +539,24 @@ if __name__ == '__main__':
                     n_hid,
                     n_units_per
                 ),
-                input=input,
-                index=index,
-                y=y,
                 batch_size=batch_size,
-            )
-
-            models = build_functions(
-                layers,
-                activation,
                 learning_rate=shared_learning_rate,
                 #L1_reg=0.0001,
-                L2_reg=0.0001,
+                L2_reg=0.0001
             )
 
             print "Training"
-            b_epoch_tim = train(
+            epoch_time = train(
                 learning_rate=learning_rate,
                 shared_learning_rate=shared_learning_rate,
                 n_epochs=n_epochs,
-                **models
+                **model.build_functions()
             )
         except MemoryError:
-            b_epoch_time = -1
+            epoch_time = -1
 
-        print "b_epoch_time: %f" % (b_epoch_time)
-        epoch_times[counter] = [b_epoch_time]
+        print "epoch_time: %f" % (epoch_time)
+        epoch_times[counter] = [epoch_time]
         counter = counter + 1
 
     print epoch_times
