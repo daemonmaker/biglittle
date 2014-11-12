@@ -7,6 +7,7 @@ import numpy as np
 import sys
 import os
 import cPickle as pkl
+from itertools import product
 
 import theano
 from theano import function
@@ -20,82 +21,76 @@ from layer import HiddenLayer, HiddenRandomBlockLayer
 from timing_stats import TimingStats as TS
 
 
-def setup_mode_parameters(data, k_per, n_out, n_units_per):
-    print "... Building layers"
+class Experiments(object):
+    def __init__(self, input_dim, num_classes):
+        self.input_dim = input_dim
+        self.num_classes = num_classes
 
-    # Shared variable used for always activating one block in a layer as in the
-    # input and output layer
-    one_block_idxs = shared(
-        np.zeros((batch_size, 1), dtype='int64'),
-        name='one_block_idxs'
-    )
+        # Shared variable used for always activating one block in a layer
+        # as in the input and output layer
+        self.one_block_idxs = shared(
+            np.zeros((batch_size, 1), dtype='int64'),
+            name='one_block_idxs'
+        )
 
-    hidden_dims = (n_out, n_units_per)
-    total_hidden_dims = hidden_dims[0]*hidden_dims[1]
-    return [
-        {
+        self.experiments = {}
+        self.results = {}
+
+    def get(self, idx):
+        return self.experiments[idx]
+
+    def add(self, idx, params):  # n_hids, n_units_per, k_pers, activations):
+        n_hids = params['n_hids']
+        n_units_per = params['n_units_per']
+        k_pers = params['k_pers']
+        activations = params['activations']
+
+        new_exp = []
+        new_exp.append({
             'l_dims': {
-                'n_in': data.train_set_x.shape[-1].eval(),
-                'n_out': total_hidden_dims
+                'n_in': self.input_dim,
+                'n_out': n_hids[0]*n_units_per
             },
             'b_dims': {
-                'n_in': (1, data.train_set_x.shape[-1].eval()),
-                'n_out': hidden_dims
+                'n_in': (1, self.input_dim),
+                'n_out': (n_hids[0], n_units_per)
             },
-            'in_idxs': one_block_idxs,
-            'k': k_per,
-            'activation': T.tanh,
-        },
-        {
+            'in_idxs': self.one_block_idxs,
+            'k': k_pers[0],
+            'activation': activations[0]
+        })
+        for i in range(1, len(k_pers)):
+            new_exp.append({
+                'l_dims': {
+                    'n_in': n_hids[i-1]*n_units_per,
+                    'n_out': n_hids[i]*n_units_per
+                },
+                'b_dims': {
+                    'n_in': (n_hids[i-1], n_units_per),
+                    'n_out': (n_hids[i], n_units_per)
+                },
+                'k': k_pers[i],
+                'activation': activations[i]
+            })
+        new_exp.append({
             'l_dims': {
-                'n_in': total_hidden_dims,
-                'n_out': total_hidden_dims
+                'n_in': n_hids[-1]*n_units_per,
+                'n_out': self.num_classes
             },
             'b_dims': {
-                'n_in': hidden_dims,
-                'n_out': hidden_dims
+                'n_in': (n_hids[-1], n_units_per),
+                'n_out': (1, self.num_classes),
             },
-            'k': k_per,
-            'activation': T.tanh,
-        },
-        # {
-        #     'l_dims': {
-        #         'n_in': total_hidden_dims,
-        #         'n_out': total_hidden_dims
-        #     },
-        #     'b_dims': {
-        #         'n_in': hidden_dims,
-        #         'n_out': hidden_dims
-        #     },
-        #     'k': k_per,
-        #     'activation': T.tanh,
-        # },
-        # {
-        #     'l_dims': {
-        #         'n_in': total_hidden_dims,
-        #         'n_out': total_hidden_dims
-        #     },
-        #     'b_dims': {
-        #         'n_in': hidden_dims,
-        #         'n_out': hidden_dims
-        #     },
-        #     'k': k_per,
-        #     'activation': T.tanh,
-        # },
-        {
-            'l_dims': {
-                'n_in': total_hidden_dims,
-                'n_out': 10
-            },
-            'b_dims': {
-                'n_in': hidden_dims,
-                'n_out': (1, 10)
-            },
-            'out_idxs': one_block_idxs,
-            'k': 1.,
-            'activation': None,
-        }
-    ]
+            'out_idxs': self.one_block_idxs,
+            'k': 1,
+            'activation': activations[-1]
+        })
+
+        self.experiments[idx] = new_exp
+        self.results[idx] = {}
+
+    def save(self, exp_id, k, v):
+        self.results[exp_id][k] = v
 
 
 class MNIST():
@@ -270,8 +265,10 @@ class BigModel(Model):
 
     def build_layers(self):
         layers = []
+        activation = self.input
         for i, params in enumerate(self.parameters):
             constructor_params = {
+                'x': activation,
                 'n_in': params['b_dims']['n_in'],
                 'n_out': params['b_dims']['n_out'],
                 'batch_size': batch_size,
@@ -279,12 +276,19 @@ class BigModel(Model):
                 'activation': params['activation'],
                 'name': 'b_layer_%d' % i
             }
+
+            # The input indices should either be specified as in the first and
+            # last layers or be the output indices of the previous layer.
             if 'in_idxs' in params.keys():
                 constructor_params['in_idxs'] = params['in_idxs']
             else:
                 constructor_params['in_idxs'] = layers[-1].out_idxs
 
+            if 'out_idxs' in params.keys():
+                constructor_params['out_idxs'] = params['out_idxs']
+
             layers.append(HiddenRandomBlockLayer(**constructor_params))
+            activation = layers[-1].output(activation)
 
         return layers
 
@@ -361,6 +365,7 @@ class LittleModel(Model):
 
 
 def train(
+        model,
         train_model,
         test_model,
         validate_model,
@@ -385,20 +390,14 @@ def train(
 
     best_params = None
     this_validation_loss = 0
-    this_validation_loss_b = 0
     best_validation_loss = np.inf
-    best_validation_loss_b = best_validation_loss
     best_iter = 0
     test_score = 0.
-    test_score_b = 0.
-    accum_b = 0
+    accum = 0
     epoch = 0
-    train_time_accum_b = 0
     done_looping = False
 
-    timers = ['train', 'valid', 'train']
-    ts = TS(['epoch', 'valid'])
-    ts_b = TS(timers)
+    ts = TS(['train', 'epoch', 'valid'])
 
     summarize_rates()
 
@@ -407,23 +406,47 @@ def train(
         epoch = epoch + 1
         ts.start('epoch')
         for minibatch_index in xrange(data.n_train_batches):
-            ts_b.start('train')
-            minibatch_avg_cost_b = train_model(minibatch_index)
-            ts_b.end('train')
-            #print "0: ", layers[-5].in_idxs.get_value()
-            #print "1: ", layers[-4].in_idxs.get_value()
-            #print "2: ", layers[-3].in_idxs.get_value()
-            #print "3: ", layers[-2].in_idxs.get_value()
-            #print "4: ", layers[-1].in_idxs.get_value()
+            ts.start('train')
+            minibatch_avg_cost = train_model(minibatch_index)
+            ts.end('train')
+            #print "0: ", model.layers[-5].in_idxs.get_value()
+            #print "1: ", model.layers[-4].in_idxs.get_value()
+            #print "2: ", model.layers[-3].in_idxs.get_value()
+            #print "3: ", model.layers[-2].in_idxs.get_value()
+            #print "4: ", model.layers[-1].in_idxs.get_value()
 
-            minibatch_avg_cost_b = minibatch_avg_cost_b[0]
-            accum_b = accum_b + minibatch_avg_cost_b
+            minibatch_avg_cost = minibatch_avg_cost[0]
+            accum = accum + minibatch_avg_cost
 
-            #print "minibatch_avg_cost: " + str(minibatch_avg_cost) + " minibatch_avg_cost_b: " + str(minibatch_avg_cost_b)
-            #print l_layers[0].W.get_value().sum(), l_layers[1].W.get_value().sum(), layers[0].W.get_value().sum(), layers[1].W.get_value().sum()
-            #print "A: ", np.max(np.abs(layers[0].W.get_value())), np.max(np.abs(layers[0].b.get_value())), np.max(np.abs(layers[1].W.get_value())), np.max(np.abs(layers[1].b.get_value()))
-            #print "B: ", np.abs(layers[0].W.get_value()).sum(), np.abs(layers[0].b.get_value()).sum(), np.abs(layers[1].W.get_value()).sum(), np.abs(layers[1].b.get_value()).sum()
-            #print "C: ", np.abs(np.array(minibatch_avg_cost_b[1])).sum(), np.abs(np.array(minibatch_avg_cost_b[2])).sum(), np.abs(np.array(minibatch_avg_cost_b[3])).sum(), np.abs(np.array(minibatch_avg_cost_b[4])).sum()
+            # print (
+            #     "minibatch_avg_cost: " + str(minibatch_avg_cost)
+            #     + " minibatch_avg_cost: " + str(minibatch_avg_cost)
+            # )
+            # print (
+            #     l_layers[0].W.get_value().sum()
+            #     + ' ' + l_layers[1].W.get_value().sum()
+            #     + ' '
+            #     + layers[0].W.get_value().sum()
+            #     + ' ' + layers[1].W.get_value().sum()
+            # )
+            # print (
+            #     "A: " + np.max(np.abs(layers[0].W.get_value()))
+            #     + ' ' + np.max(np.abs(layers[0].b.get_value()))
+            #     + ' ' + np.max(np.abs(layers[1].W.get_value()))
+            #     + ' ' + np.max(np.abs(layers[1].b.get_value()))
+            # )
+            # print (
+            #     "B: " + np.abs(layers[0].W.get_value()).sum()
+            #     + ' ' + np.abs(layers[0].b.get_value()).sum()
+            #     + ' ' + np.abs(layers[1].W.get_value()).sum()
+            #     + ' ' + np.abs(layers[1].b.get_value()).sum()
+            # )
+            # print (
+            #     "C: " + np.abs(np.array(minibatch_avg_cost[1])).sum()
+            #     + ' ' + np.abs(np.array(minibatch_avg_cost[2])).sum()
+            #     + ' ' + np.abs(np.array(minibatch_avg_cost[3])).sum()
+            #     + ' ' + np.abs(np.array(minibatch_avg_cost[4])).sum()
+            # )
 
             # iteration number
             iter = (epoch - 1) * data.n_train_batches + minibatch_index
@@ -432,30 +455,34 @@ def train(
                 ts.end('epoch')
                 ts.reset('epoch')
 
-                ts_b.reset('train')
-                accum_b = accum_b / validation_frequency
-                b_summary = ("minibatch_avg_cost_b: %f, time: %f"
-                             % (accum_b, ts_b.accumed['train'][-1][1]))
-                accum_b = 0
+                ts.reset('train')
+                accum = accum / validation_frequency
+                summary = ("minibatch_avg_cost: %f, time: %f"
+                           % (accum, ts.accumed['train'][-1][1]))
+                accum = 0
 
-                print "%s" % (b_summary)
+                print "%s" % (summary)
 
                 # compute zero-one loss on validation set
-                summary = ('epoch %i, minibatch %i/%i'
-                           % (epoch, minibatch_index + 1, data.n_train_batches))
+                summary = (
+                    'epoch %i, minibatch %i/%i'
+                    % (
+                        epoch, minibatch_index + 1, data.n_train_batches
+                    )
+                )
 
-                validation_losses_b = [validate_model(i) for i
-                                       in xrange(data.n_valid_batches)]
-                this_validation_loss_b = np.mean(validation_losses_b)
-                #this_validation_loss_b = 0
-                b_summary = ('big validation error %f %% '
-                             % (this_validation_loss_b * 100.))
+                validation_losses = [validate_model(i) for i
+                                     in xrange(data.n_valid_batches)]
+                this_validation_loss = np.mean(validation_losses)
+                #this_validation_loss = 0
+                summary = ('big validation error %f %% '
+                           % (this_validation_loss * 100.))
 
-                print ("%s %s" % (summary, b_summary))
+                print ("%s %s" % (summary, summary))
                 #ipdb.set_trace()
 
                 # if we got the best validation score until now
-                this_validation_loss = this_validation_loss_b
+                this_validation_loss = this_validation_loss
 
                 if this_validation_loss < best_validation_loss:
                     #improve patience if loss improvement is good enough
@@ -463,22 +490,21 @@ def train(
                        improvement_threshold:
                         patience = max(patience, iter * patience_increase)
 
-                    best_validation_loss_b = this_validation_loss_b
-                    best_validation_loss = best_validation_loss_b
+                    best_validation_loss = this_validation_loss
 
                     best_iter = iter
 
                     # test it on the test set
-                    test_losses_b = [test_model(i) for i
-                                     in xrange(data.n_test_batches)]
-                    test_score_b = np.mean(test_losses_b)
-                    #test_score_b = 0
-                    b_summary = 'big: %f' % (test_score_b * 100.)
+                    test_losses = [test_model(i) for i
+                                   in xrange(data.n_test_batches)]
+                    test_score = np.mean(test_losses)
+                    #test_score = 0
+                    summary = 'big: %f' % (test_score * 100.)
 
                     print ('     epoch %i, minibatch %i/%i,'
                            ' test error of best model %s'
                            % (epoch, minibatch_index + 1,
-                              data.n_train_batches, b_summary))
+                              data.n_train_batches, summary))
 
                 learning_rate.update()
 
@@ -493,7 +519,7 @@ def train(
     ts.end()
     print('Optimization complete. Best validation score of %f %% '
           'obtained at iteration %i, with test performance %f %%' %
-          (best_validation_loss_b * 100., best_iter + 1, test_score_b * 100.))
+          (best_validation_loss * 100., best_iter + 1, test_score * 100.))
     print >> sys.stderr, ('The code for file ' +
                           os.path.split(__file__)[1] +
                           ' ran for %s' % ts)
@@ -508,37 +534,51 @@ if __name__ == '__main__':
     batch_size = 10
     n_epochs = 1000
     learning_rate = LinearChangeRate(0.011, -0.01, 0.01, 'learning_rate')
-    n_hids_len = 5
-    n_hids = (pow(10, y) for y in range(2, 2+n_hids_len))
-    n_hids = (25,)
-    n_units_per = 20
-    k_per = 1
+    #n_hids = (pow(10, y) for y in range(2, 2+n_hids_len))
+    experiments = {
+        0: {
+            'n_hids': (25,),
+            'n_units_per': 20,
+            'k_pers': (1.,),
+            'activations': (T.tanh, None)
+        },
+        1: {
+            'n_hids': (25, 25),
+            'n_units_per': 20,
+            'k_pers': (1., 0.5),
+            'activations': (T.tanh, T.tanh, None)
+        },
+        2: {
+            'n_hids': (25, 50, 25),
+            'n_units_per': 20,
+            'k_pers': (1., 0.25, 1),
+            'activations': (T.tanh, T.tanh, T.tanh, None)
+        }
+    }
 
     print "Loading Data"
     print "... MNIST"
     data = MNIST(model_class.reshape_data)
 
-    epoch_times = np.zeros((n_hids_len, 1))
-    counter = 0
-    for n_hid in n_hids:
+    exps = Experiments(
+        input_dim=data.train_set_x.shape[-1].eval(),
+        num_classes=10
+    )
+
+    exps_to_run = [2]
+
+    for idx in exps_to_run:
+        exps.add(idx, experiments[idx])
         try:
             shared_learning_rate = shared(
                 np.array(learning_rate.rate, dtype=config.floatX),
                 name='learning_rate'
             )
 
-            k = int(n_hid*k_per)
-            print "k_per: %d, k: %d" % (k_per, k)
-
-            print "Building model"
+            print "Building model: %s" % str(model_class)
             model = model_class(
                 data=data,
-                parameters=setup_mode_parameters(
-                    data,
-                    k_per,
-                    n_hid,
-                    n_units_per
-                ),
+                parameters=exps.get(idx),
                 batch_size=batch_size,
                 learning_rate=shared_learning_rate,
                 #L1_reg=0.0001,
@@ -547,6 +587,7 @@ if __name__ == '__main__':
 
             print "Training"
             epoch_time = train(
+                model,
                 learning_rate=learning_rate,
                 shared_learning_rate=shared_learning_rate,
                 n_epochs=n_epochs,
@@ -556,8 +597,6 @@ if __name__ == '__main__':
             epoch_time = -1
 
         print "epoch_time: %f" % (epoch_time)
-        epoch_times[counter] = [epoch_time]
-        counter = counter + 1
+        exps.save(idx, 'epoch_time', epoch_time)
 
-    print epoch_times
-    ipdb.set_trace()
+    pkl.dump(exps, open('random_proj_experiments.pkl', 'wb'))
