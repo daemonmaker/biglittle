@@ -174,8 +174,16 @@ class HiddenBlockLayer(HiddenLayer):
         self.l_param_map = l_param_map
 
     def __str__(self):
-        return ("n_in: %d (%d units) , n_out: %d (%d units)"
-               % (self.n_in, self.n_units_per_in, self.n_out, self.n_units_per_out))
+        return (
+            "n_in: %d (%d units), n_out: %d (%d units), k: %d"
+            % (
+                self.n_in,
+                self.n_units_per_in,
+                self.n_out,
+                self.n_units_per_out,
+                self.k
+            )
+        )
 
     def _init_parameters(self):
         inputSize = self.n_in*self.n_units_per_in
@@ -241,6 +249,7 @@ class HiddenBlockLayer(HiddenLayer):
 class HiddenRandomBlockLayer(HiddenBlockLayer):
     def __init__(
         self,
+        x,
         n_in,
         n_out,
         in_idxs,
@@ -255,16 +264,16 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
         self.k = int(n_out[0]*k)
         assert(self.k > 0)
 
-        self.out_idxs = out_idxs
-        if self.out_idxs is None:
-            self.out_idxs = shared(
-                np.repeat(
-                    np.arange(self.k).reshape(1, self.k),
-                    batch_size,
-                    axis=0
-                ),
-                name="%s_out_idxs" % (name)
-            )
+        # self.out_idxs = out_idxs
+        # if self.out_idxs is None:
+        #     self.out_idxs = shared(
+        #         np.repeat(
+        #             np.arange(self.k).reshape(1, self.k),
+        #             batch_size,
+        #             axis=0
+        #         ),
+        #         name="%s_out_idxs" % (name)
+        #     )
 
         super(
             HiddenRandomBlockLayer,
@@ -273,7 +282,7 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
             n_in=n_in,
             n_out=n_out,
             in_idxs=in_idxs,
-            out_idxs=self.out_idxs,
+            out_idxs=out_idxs,
             k=k,
             batch_size=batch_size,
             activation=activation,
@@ -281,20 +290,11 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
             rng=rng,
         )
 
-        iWin = self.k
-
-        if self.n_in == 1:
-            iWin = 1
-
         self.trng = RandomStreams(seed=0)
         self.rand_proj_mat = self.trng.normal(
-            (iWin*self.n_units_per_in, self.n_out)
+            #            (iWin*self.n_units_per_in, self.n_out)
+            (x.shape[1]*x.shape[2], self.n_out)
         )
-
-
-    def __str__(self):
-        return ("n_in: %d (%d units) , n_out: %d (%d units)"
-               % (self.n_in, self.n_units_per_in, self.n_out, self.n_units_per_out))
 
     def _init_parameters(self):
         inputSize = self.n_in*self.n_units_per_in
@@ -332,12 +332,19 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
 
     def output(self, x):
         if self.n_out > 1:
+            iWin = self.k
+
+            if self.n_in == 1:
+                iWin = 1
+
             rnd_proj = T.dot(
                 x.reshape((x.shape[0], x.shape[1]*x.shape[2])),
                 self.rand_proj_mat
             )
             self.out_idxs = T.argsort(rnd_proj)[:, -self.k:]
-            #self.out_idxs.set_value(np.random.randint(0, self.n_out, (self.batch_size, self.k)))
+            # self.out_idxs.set_value(
+            #     np.random.randint(0, self.n_out, (self.batch_size, self.k))
+            # )
 
         if self.l_params is None:
             sparse = sparse_block_dot_SS(
