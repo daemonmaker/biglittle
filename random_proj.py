@@ -378,7 +378,7 @@ def train(
 
     # early-stopping parameters
     patience = 10000  # look as this many examples regardless
-    patience_increase = 10  # wait this much longer when a new best is
+    patience_increase = 100  # wait this much longer when a new best is
                            # found
     improvement_threshold = 0.995  # a relative improvement of this much is
                                    # considered significant
@@ -531,9 +531,10 @@ if __name__ == '__main__':
     model_class = BigModel
 
     rng = np.random.RandomState()
-    batch_size = 10
-    n_epochs = 1000
-    learning_rate = LinearChangeRate(0.011, -0.01, 0.01, 'learning_rate')
+    batch_size = 32
+    n_epochs = 100000
+    learning_rate = LinearChangeRate(0.5, -0.01, 0.01, 'learning_rate')
+    #learning_rate = LinearChangeRate(0.21, -0.01, 0.1, 'learning_rate')
     #n_hids = (pow(10, y) for y in range(2, 2+n_hids_len))
     experiments = {
         0: {
@@ -549,10 +550,28 @@ if __name__ == '__main__':
             'activations': (T.tanh, T.tanh, None)
         },
         2: {
-            'n_hids': (25, 50, 25),
+            'n_hids': (25, 100, 25),
             'n_units_per': 20,
             'k_pers': (1., 0.25, 1),
             'activations': (T.tanh, T.tanh, T.tanh, None)
+        },
+        3: {
+            'n_hids': (50, 500, 10),
+            'n_units_per': 20,
+            'k_pers': (0.9, 0.05, 1),
+            'activations': (T.tanh, T.tanh, T.tanh, None)
+        },
+        4: {
+            'n_hids': (50, 500, 500, 10),
+            'n_units_per': 20,
+            'k_pers': (1, 0.05, 0.05, 1),
+            'activations': (T.tanh, T.tanh, T.tanh, T.tanh, None)
+        },
+        5: {
+            'n_hids': (50, 75, 100, 75, 50),
+            'n_units_per': 32,
+            'k_pers': (1., 0.1, 0.05, 0.1, 1),
+            'activations': (T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None)
         }
     }
 
@@ -565,7 +584,7 @@ if __name__ == '__main__':
         num_classes=10
     )
 
-    exps_to_run = [2]
+    exps_to_run = [4]
 
     for idx in exps_to_run:
         exps.add(idx, experiments[idx])
