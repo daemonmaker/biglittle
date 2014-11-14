@@ -39,7 +39,7 @@ class Experiments(object):
     def get(self, idx):
         return self.experiments[idx]
 
-    def add(self, idx, params):  # n_hids, n_units_per, k_pers, activations):
+    def add(self, idx, params):
         n_hids = params['n_hids']
         n_units_per = params['n_units_per']
         k_pers = params['k_pers']
@@ -47,40 +47,25 @@ class Experiments(object):
 
         new_exp = []
         new_exp.append({
-            'l_dims': {
-                'n_in': self.input_dim,
-                'n_out': n_hids[0]*n_units_per
-            },
-            'b_dims': {
-                'n_in': (1, self.input_dim),
-                'n_out': (n_hids[0], n_units_per)
-            },
+            'n_in': self.input_dim,
+            'n_hids': n_hids[0],
+            'n_units_per': n_units_per,
             'in_idxs': self.one_block_idxs,
             'k': k_pers[0],
             'activation': activations[0]
         })
         for i in range(1, len(k_pers)):
             new_exp.append({
-                'l_dims': {
-                    'n_in': n_hids[i-1]*n_units_per,
-                    'n_out': n_hids[i]*n_units_per
-                },
-                'b_dims': {
-                    'n_in': (n_hids[i-1], n_units_per),
-                    'n_out': (n_hids[i], n_units_per)
-                },
+                'n_in': n_hids[i-1],
+                'n_hids': n_hids[i],
+                'n_units_per': n_units_per,
                 'k': k_pers[i],
                 'activation': activations[i]
             })
         new_exp.append({
-            'l_dims': {
-                'n_in': n_hids[-1]*n_units_per,
-                'n_out': self.num_classes
-            },
-            'b_dims': {
-                'n_in': (n_hids[-1], n_units_per),
-                'n_out': (1, self.num_classes),
-            },
+            'n_in': n_hids[-1],
+            'n_hids': self.num_classes,
+            'n_units_per': n_units_per,
             'out_idxs': self.one_block_idxs,
             'k': 1,
             'activation': activations[-1]
@@ -239,7 +224,7 @@ class Model(object):
         }
 
 
-class BigModel(Model):
+class SparseBlockModel(Model):
     reshape_data = True
 
     def __init__(
@@ -254,7 +239,7 @@ class BigModel(Model):
     ):
         self.input = T.tensor3('input', dtype=config.floatX)
 
-        super(BigModel, self).__init__(
+        super(SparseBlockModel, self).__init__(
             parameters,
             batch_size,
             learning_rate,
@@ -266,16 +251,21 @@ class BigModel(Model):
     def build_layers(self):
         layers = []
         activation = self.input
+        num_layers = len(self.parameters)
         for i, params in enumerate(self.parameters):
             constructor_params = {
                 'x': activation,
-                'n_in': params['b_dims']['n_in'],
-                'n_out': params['b_dims']['n_out'],
+                'n_in': (params['n_in'], params['n_units_per']),
+                'n_out': (params['n_hids'], params['n_units_per']),
                 'batch_size': batch_size,
                 'k': params['k'],
                 'activation': params['activation'],
                 'name': 'b_layer_%d' % i
             }
+            if i == 0:
+                constructor_params['n_in'] = (1, params['n_in'])
+            elif i == (num_layers - 1):
+                constructor_params['n_out'] = (1, params['n_hids'])
 
             # The input indices should either be specified as in the first and
             # last layers or be the output indices of the previous layer.
@@ -318,7 +308,7 @@ class BigModel(Model):
         return T.nnet.softmax(activation.reshape((shp[0], shp[2])))
 
 
-class LittleModel(Model):
+class MLPModel(Model):
     reshape_data = False
 
     def __init__(
@@ -332,8 +322,9 @@ class LittleModel(Model):
             zero_last_layer_params=False
     ):
         self.input = T.matrix('input', dtype=config.floatX)
+        self.num_layers = len(parameters)
 
-        super(LittleModel, self).__init__(
+        super(MLPModel, self).__init__(
             parameters,
             batch_size,
             learning_rate,
@@ -342,12 +333,24 @@ class LittleModel(Model):
             zero_last_layer_params
         )
 
+    def _calc_num_units(self, layer_idx, params):
+        units = [
+            params['n_in']*params['n_units_per'],
+            params['n_hids']*params['n_units_per']
+        ]
+        if layer_idx == 0:
+            units[0] = params['n_in']
+        elif layer_idx == (self.num_layers - 1):
+            units[1] = params['n_hids']
+        return tuple(units)
+
     def build_layers(self):
         layers = []
         for i, params in enumerate(self.parameters):
+            units = self._calc_num_units(i, params)
             constructor_params = {
-                'n_in': params['l_dims']['n_in'],
-                'n_out': params['l_dims']['n_out'],
+                'n_in': units[0],
+                'n_out': units[1],
                 'batch_size': batch_size,
                 'k': params['k'],
                 'activation': params['activation'],
@@ -362,6 +365,19 @@ class LittleModel(Model):
         for layer in self.layers:
             activation = layer.output(activation)
         return T.nnet.softmax(activation)
+
+
+class EqualParametersModel(MLPModel):
+    pass
+
+
+class EqualComputationsModel(MLPModel):
+    def _calc_num_units(self, layer_idx, params):
+        units = super(EqualComputationsModel)._calc_num_units(
+            layer_idx,
+            params
+        )
+        return (units[0]*params['k'], units[1]*params['k'])
 
 
 def train(
@@ -528,13 +544,13 @@ def train(
 
 
 if __name__ == '__main__':
-    model_class = BigModel
+    model_class = EqualParametersModel
 
     rng = np.random.RandomState()
     batch_size = 32
     n_epochs = 100000
-    learning_rate = LinearChangeRate(0.5, -0.01, 0.01, 'learning_rate')
-    #learning_rate = LinearChangeRate(0.21, -0.01, 0.1, 'learning_rate')
+    #learning_rate = LinearChangeRate(0.5, -0.01, 0.01, 'learning_rate')
+    learning_rate = LinearChangeRate(0.21, -0.01, 0.2, 'learning_rate')
     #n_hids = (pow(10, y) for y in range(2, 2+n_hids_len))
     experiments = {
         0: {
