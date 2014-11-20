@@ -8,6 +8,7 @@ import sys
 import os
 import cPickle as pkl
 from itertools import product
+import gc
 
 import theano
 from theano import function
@@ -26,24 +27,24 @@ class Experiments(object):
         self.input_dim = input_dim
         self.num_classes = num_classes
 
-        # Shared variable used for always activating one block in a layer
-        # as in the input and output layer
-        self.one_block_idxs = shared(
-            np.zeros((batch_size, 1), dtype='int64'),
-            name='one_block_idxs'
-        )
-
         self.experiments = {}
         self.results = {}
 
-    def get(self, idx):
-        return self.experiments[idx]
+    def get_layers_definition(self, idx):
+        layers_description = self.experiments[idx]['layers_description']
+        parameters = self.experiments[idx]['parameters']
 
-    def add(self, idx, params):
-        n_hids = params['n_hids']
-        n_units_per = params['n_units_per']
-        k_pers = params['k_pers']
-        activations = params['activations']
+        # Shared variable used for always activating one block in a layer
+        # as in the input and output layer
+        self.one_block_idxs = shared(
+            np.zeros((parameters['batch_size'], 1), dtype='int64'),
+            name='one_block_idxs'
+        )
+
+        n_hids = layers_description['n_hids']
+        n_units_per = layers_description['n_units_per']
+        k_pers = layers_description['k_pers']
+        activations = layers_description['activations']
 
         new_exp = []
         new_exp.append({
@@ -71,15 +72,32 @@ class Experiments(object):
             'activation': activations[-1]
         })
 
-        self.experiments[idx] = new_exp
-        self.results[idx] = {}
+        return new_exp
 
-    def save(self, exp_id, k, v):
-        self.results[exp_id][k] = v
+    def get_parameters(self, idx):
+        return self.parameters[idx]
+
+    def add(self, idx, layers_description, parameters):
+        self.experiments[idx] = {
+            'layers_description': layers_description,
+            'parameters': parameters
+        }
+        if idx not in self.results.keys():
+            self.results[idx] = {}
+
+    def save(self, exp_id, model_name, k, v):
+        if model_name not in self.results[exp_id].keys():
+            self.results[exp_id][model_name] = {}
+        self.results[exp_id][model_name][k] = v
 
 
 class MNIST():
-    def __init__(self, reshape_data=False):
+    def __init__(self, batch_size, reshape_data=False):
+        assert(batch_size > 0)
+        self.batch_size = batch_size
+
+        self.reshape_data = reshape_data
+
         dataset = 'mnist.pkl.gz'
         datasets = load_data(dataset, reshape_data)
 
@@ -89,26 +107,29 @@ class MNIST():
 
         self.n_train_batches = self.train_set_x.get_value(
             borrow=True
-        ).shape[0] / batch_size
+        ).shape[0] / self.batch_size
         self.n_valid_batches = self.valid_set_x.get_value(
             borrow=True
-        ).shape[0] / batch_size
+        ).shape[0] / self.batch_size
         self.n_test_batches = self.test_set_x.get_value(
             borrow=True
-        ).shape[0] / batch_size
+        ).shape[0] / self.batch_size
 
 
 class Model(object):
     def __init__(
             self,
-            parameters,
+            data,
+            layer_descriptions,
             batch_size,
             learning_rate,
             L1_reg=0.0,
             L2_reg=0.0001,
             zero_last_layer_params=False
     ):
-        self.parameters = parameters
+        self.data = data
+
+        self.layer_descriptions = layer_descriptions
 
         self.index = T.lscalar('index')
         self.y = T.ivector('y')
@@ -192,8 +213,12 @@ class Model(object):
             [cost],
             updates=updates,
             givens={
-                input: data.train_set_x[index*batch_size:(index+1)*batch_size],
-                y: data.train_set_y[index*batch_size:(index+1)*batch_size]
+                input: self.data.train_set_x[
+                    index*self.batch_size:(index+1)*self.batch_size
+                ],
+                y: self.data.train_set_y[
+                    index*self.batch_size:(index+1)*self.batch_size
+                ]
             }
         )
 
@@ -202,8 +227,12 @@ class Model(object):
             [index],
             error,
             givens={
-                input: data.test_set_x[index*batch_size:(index+1)*batch_size],
-                y: data.test_set_y[index*batch_size:(index+1)*batch_size]
+                input: self.data.test_set_x[
+                    index*self.batch_size:(index+1)*self.batch_size
+                ],
+                y: self.data.test_set_y[
+                    index*self.batch_size:(index+1)*self.batch_size
+                ]
             }
         )
 
@@ -212,8 +241,12 @@ class Model(object):
             [index],
             error,
             givens={
-                input: data.valid_set_x[index*batch_size:(index+1)*batch_size],
-                y: data.valid_set_y[index*batch_size:(index+1)*batch_size]
+                input: self.data.valid_set_x[
+                    index*self.batch_size:(index+1)*self.batch_size
+                ],
+                y: self.data.valid_set_y[
+                    index*self.batch_size:(index+1)*self.batch_size
+                ]
             }
         )
 
@@ -230,7 +263,7 @@ class SparseBlockModel(Model):
     def __init__(
             self,
             data,
-            parameters,
+            layer_descriptions,
             batch_size,
             learning_rate,
             L1_reg=0.0,
@@ -240,7 +273,8 @@ class SparseBlockModel(Model):
         self.input = T.tensor3('input', dtype=config.floatX)
 
         super(SparseBlockModel, self).__init__(
-            parameters,
+            data,
+            layer_descriptions,
             batch_size,
             learning_rate,
             L1_reg,
@@ -251,31 +285,31 @@ class SparseBlockModel(Model):
     def build_layers(self):
         layers = []
         activation = self.input
-        num_layers = len(self.parameters)
-        for i, params in enumerate(self.parameters):
+        num_layers = len(self.layer_descriptions)
+        for i, layer_desc in enumerate(self.layer_descriptions):
             constructor_params = {
                 'x': activation,
-                'n_in': (params['n_in'], params['n_units_per']),
-                'n_out': (params['n_hids'], params['n_units_per']),
-                'batch_size': batch_size,
-                'k': params['k'],
-                'activation': params['activation'],
+                'n_in': (layer_desc['n_in'], layer_desc['n_units_per']),
+                'n_out': (layer_desc['n_hids'], layer_desc['n_units_per']),
+                'batch_size': self.batch_size,
+                'k': layer_desc['k'],
+                'activation': layer_desc['activation'],
                 'name': 'b_layer_%d' % i
             }
             if i == 0:
-                constructor_params['n_in'] = (1, params['n_in'])
+                constructor_params['n_in'] = (1, layer_desc['n_in'])
             elif i == (num_layers - 1):
-                constructor_params['n_out'] = (1, params['n_hids'])
+                constructor_params['n_out'] = (1, layer_desc['n_hids'])
 
             # The input indices should either be specified as in the first and
             # last layers or be the output indices of the previous layer.
-            if 'in_idxs' in params.keys():
-                constructor_params['in_idxs'] = params['in_idxs']
+            if 'in_idxs' in layer_desc.keys():
+                constructor_params['in_idxs'] = layer_desc['in_idxs']
             else:
                 constructor_params['in_idxs'] = layers[-1].out_idxs
 
-            if 'out_idxs' in params.keys():
-                constructor_params['out_idxs'] = params['out_idxs']
+            if 'out_idxs' in layer_desc.keys():
+                constructor_params['out_idxs'] = layer_desc['out_idxs']
 
             layers.append(HiddenRandomBlockLayer(**constructor_params))
             activation = layers[-1].output(activation)
@@ -314,7 +348,7 @@ class MLPModel(Model):
     def __init__(
             self,
             data,
-            parameters,
+            layer_descriptions,
             batch_size,
             learning_rate,
             L1_reg=0.0,
@@ -322,10 +356,11 @@ class MLPModel(Model):
             zero_last_layer_params=False
     ):
         self.input = T.matrix('input', dtype=config.floatX)
-        self.num_layers = len(parameters)
+        self.num_layers = len(layer_descriptions)
 
         super(MLPModel, self).__init__(
-            parameters,
+            data,
+            layer_descriptions,
             batch_size,
             learning_rate,
             L1_reg,
@@ -334,26 +369,18 @@ class MLPModel(Model):
         )
 
     def _calc_num_units(self, layer_idx, params):
-        units = [
-            params['n_in']*params['n_units_per'],
-            params['n_hids']*params['n_units_per']
-        ]
-        if layer_idx == 0:
-            units[0] = params['n_in']
-        elif layer_idx == (self.num_layers - 1):
-            units[1] = params['n_hids']
-        return tuple(units)
+        raise NotImplementedError('_calc_num_units')
 
     def build_layers(self):
         layers = []
-        for i, params in enumerate(self.parameters):
-            units = self._calc_num_units(i, params)
+        for i, layer_desc in enumerate(self.layer_descriptions):
+            units = self._calc_num_units(i)
             constructor_params = {
                 'n_in': units[0],
                 'n_out': units[1],
-                'batch_size': batch_size,
-                'k': params['k'],
-                'activation': params['activation'],
+                'batch_size': self.batch_size,
+                'k': layer_desc['k'],
+                'activation': layer_desc['activation'],
                 'name': 'l_layer_%d' % i
             }
             layers.append(HiddenLayer(**constructor_params))
@@ -368,16 +395,69 @@ class MLPModel(Model):
 
 
 class EqualParametersModel(MLPModel):
-    pass
+    def _calc_num_units(self, layer_idx):
+        params = self.layer_descriptions[layer_idx]
+        units = [
+            params['n_in']*params['n_units_per'],
+            params['n_hids']*params['n_units_per']
+        ]
+        if layer_idx == 0:
+            units[0] = params['n_in']
+        elif layer_idx == (self.num_layers - 1):
+            units[1] = params['n_hids']
+        return tuple(units)
 
 
 class EqualComputationsModel(MLPModel):
-    def _calc_num_units(self, layer_idx, params):
-        units = super(EqualComputationsModel)._calc_num_units(
-            layer_idx,
-            params
-        )
-        return (units[0]*params['k'], units[1]*params['k'])
+    def _calc_num_units(self, layer_idx):
+        params = self.layer_descriptions[layer_idx]
+        units = [
+            params['n_in']*params['n_units_per'],
+            params['n_hids']*params['n_units_per']
+        ]
+        if layer_idx == 0:
+            units[0] = params['n_in']
+        elif layer_idx == (self.num_layers - 1):
+            units[1] = params['n_hids']
+
+        units[0] *= self.layer_descriptions[layer_idx - 1]['k']
+        units[1] *= params['k']
+
+        return tuple(units)
+
+
+def simple_train(
+        model,
+        train_model,
+        test_model,
+        validate_model,
+        learning_rate,
+        shared_learning_rate,
+        n_epochs=1000
+):
+    ts = TS(['train', 'epoch'])
+    epoch = 0
+    minibatch_avg_cost_accum = 0
+    while(epoch < n_epochs):
+        ts.start('epoch')
+        for minibatch_index in xrange(model.data.n_train_batches):
+            if minibatch_index % 10 == 0:
+                print '... minibatch_index: %d/%d\r' \
+                    % (minibatch_index, model.data.n_train_batches),
+                # Note the magic comma on the previous line prevents new lines
+            ts.start('train')
+            minibatch_avg_cost = train_model(minibatch_index)
+            ts.end('train')
+
+            minibatch_avg_cost_accum += minibatch_avg_cost[0]
+
+        print '... minibatch_avg_cost_accum: %f' \
+            % (minibatch_avg_cost_accum/float(model.data.n_train_batches))
+
+        ts.end('epoch')
+        epoch += 1
+
+    return ts
 
 
 def train(
@@ -491,11 +571,10 @@ def train(
                                      in xrange(data.n_valid_batches)]
                 this_validation_loss = np.mean(validation_losses)
                 #this_validation_loss = 0
-                summary = ('big validation error %f %% '
+                summary = ('validation error %f %% '
                            % (this_validation_loss * 100.))
 
-                print ("%s %s" % (summary, summary))
-                #ipdb.set_trace()
+                print ("%s" % (summary))
 
                 # if we got the best validation score until now
                 this_validation_loss = this_validation_loss
@@ -515,7 +594,7 @@ def train(
                                    in xrange(data.n_test_batches)]
                     test_score = np.mean(test_losses)
                     #test_score = 0
-                    summary = 'big: %f' % (test_score * 100.)
+                    summary = 'test_score: %f' % (test_score * 100.)
 
                     print ('     epoch %i, minibatch %i/%i,'
                            ' test error of best model %s'
@@ -540,98 +619,196 @@ def train(
                           os.path.split(__file__)[1] +
                           ' ran for %s' % ts)
 
-    return ts.diffs['epoch']
+    return ts
 
 
-if __name__ == '__main__':
-    model_class = EqualParametersModel
+def run_experiments():
+    model_class = SparseBlockModel
+    #model_class = EqualParametersModel
 
     rng = np.random.RandomState()
-    batch_size = 32
-    n_epochs = 100000
-    #learning_rate = LinearChangeRate(0.5, -0.01, 0.01, 'learning_rate')
-    learning_rate = LinearChangeRate(0.21, -0.01, 0.2, 'learning_rate')
-    #n_hids = (pow(10, y) for y in range(2, 2+n_hids_len))
-    experiments = {
+    n_epochs = 1
+
+    layer_descriptions = {
         0: {
             'n_hids': (25,),
             'n_units_per': 20,
             'k_pers': (1.,),
-            'activations': (T.tanh, None)
+            'activations': (T.tanh, None),
         },
         1: {
             'n_hids': (25, 25),
             'n_units_per': 20,
             'k_pers': (1., 0.5),
-            'activations': (T.tanh, T.tanh, None)
+            'activations': (T.tanh, T.tanh, None),
         },
         2: {
             'n_hids': (25, 100, 25),
             'n_units_per': 20,
             'k_pers': (1., 0.25, 1),
-            'activations': (T.tanh, T.tanh, T.tanh, None)
+            'activations': (T.tanh, T.tanh, T.tanh, None),
         },
         3: {
             'n_hids': (50, 500, 10),
             'n_units_per': 20,
             'k_pers': (0.9, 0.05, 1),
-            'activations': (T.tanh, T.tanh, T.tanh, None)
+            'activations': (T.tanh, T.tanh, T.tanh, None),
         },
         4: {
             'n_hids': (50, 500, 500, 10),
             'n_units_per': 20,
             'k_pers': (1, 0.05, 0.05, 1),
-            'activations': (T.tanh, T.tanh, T.tanh, T.tanh, None)
+            'activations': (T.tanh, T.tanh, T.tanh, T.tanh, None),
         },
         5: {
             'n_hids': (50, 75, 100, 75, 50),
             'n_units_per': 32,
             'k_pers': (1., 0.1, 0.05, 0.1, 1),
-            'activations': (T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None)
-        }
+            'activations': (T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None),
+        },
+        6: {
+            'n_hids': (50, 500, 750, 750, 500, 10),
+            'n_units_per': 32,
+            'k_pers': (1, 0.1, 0.05, 0.05, 0.1, 1),
+            'activations': (
+                T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
+            ),
+        },
     }
 
-    print "Loading Data"
-    print "... MNIST"
-    data = MNIST(model_class.reshape_data)
+    parameter_configs = {
+        0: {
+            'batch_size': 32,
+            'learning_rate': LinearChangeRate(
+                0.21, -0.01, 0.2, 'learning_rate'
+            ),
+            'L1_reg': 0.0,
+            'L2_reg': 0.0001
+        },
+        1: {
+            'batch_size': 32,
+            'learning_rate': LinearChangeRate(
+                0.21, -0.01, 0.2, 'learning_rate'
+            ),
+            'L1_reg': 0.0,
+            'L2_reg': 0.0001
+        },
+    }
+
+    parameter_configs = {}
+    for idx, batch_size in enumerate(range(0, 9)):
+        parameter_configs[idx] = {
+            'batch_size': 2**batch_size,
+            'learning_rate': LinearChangeRate(
+                0.21, -0.01, 0.2, 'learning_rate'
+            ),
+            'L1_reg': 0.0,
+            'L2_reg': 0.0001
+        }
+
+    experiments = {}
+    for i, (ld_idx, param_idx) in enumerate(product(
+        range(len(layer_descriptions)),
+        range(len(parameter_configs)),
+    )):
+        experiments[i] = {
+            'layer_description': ld_idx,
+            'parameters': param_idx,
+        }
 
     exps = Experiments(
-        input_dim=data.train_set_x.shape[-1].eval(),
+        input_dim=784,  # data.train_set_x.shape[-1].eval(),
         num_classes=10
     )
 
-    exps_to_run = [4]
+    exps_to_run = [0]
+    exps_to_run = range(len(experiments))
+    models = [EqualParametersModel, EqualComputationsModel, SparseBlockModel]
 
-    for idx in exps_to_run:
-        exps.add(idx, experiments[idx])
+    data = None
+    model = None
+    timings = None
+    for idx, model_class in product(exps_to_run, models):
+        print "Experiment: %d, Model class: %s" % (idx, model_class)
+        exp_config = experiments[idx]
+        parameters = parameter_configs[exp_config['parameters']]
+        exps.add(
+            idx,
+            layer_descriptions[exp_config['layer_description']],
+            parameters
+        )
+
+        if (
+                data is None
+                or data.batch_size != parameters['batch_size']
+                or data.reshape_data != model_class.reshape_data
+        ):
+            print "Loading Data"
+            print "... MNIST"
+            data = MNIST(parameters['batch_size'], model_class.reshape_data)
+            gc.collect()
+
         try:
             shared_learning_rate = shared(
-                np.array(learning_rate.rate, dtype=config.floatX),
+                np.array(
+                    parameters['learning_rate'].rate,
+                    dtype=config.floatX
+                ),
                 name='learning_rate'
             )
 
             print "Building model: %s" % str(model_class)
             model = model_class(
                 data=data,
-                parameters=exps.get(idx),
-                batch_size=batch_size,
+                layer_descriptions=exps.get_layers_definition(idx),
+                batch_size=parameters['batch_size'],
                 learning_rate=shared_learning_rate,
-                #L1_reg=0.0001,
-                L2_reg=0.0001
+                L1_reg=parameters['L1_reg'],
+                L2_reg=parameters['L2_reg'],
             )
 
             print "Training"
-            epoch_time = train(
+            timings = simple_train(
                 model,
-                learning_rate=learning_rate,
+                learning_rate=parameters['learning_rate'],
                 shared_learning_rate=shared_learning_rate,
                 n_epochs=n_epochs,
                 **model.build_functions()
             )
+
+            model = None
+
         except MemoryError:
             epoch_time = -1
 
-        print "epoch_time: %f" % (epoch_time)
-        exps.save(idx, 'epoch_time', epoch_time)
+        if timings is not None:
+            print "epoch_time: %s" % timings
+            exps.save(idx, model_class.__name__, 'timings', timings)
 
-    pkl.dump(exps, open('random_proj_experiments.pkl', 'wb'))
+        timings = None
+        gc.collect()
+
+        pkl.dump(exps, open('random_proj_experiments.pkl', 'wb'))
+
+
+def plot_experiments():
+    import matplotlib.pyplot as plt
+
+    exps = pkl.load(open('random_proj_experiments.pkl', 'rb'))
+    batch_sizes = [exp['parameters']['batch_size']
+                   for exp_idx, exp in exps.experiments.iteritems()]
+    timings = {model_name: np.zeros(len(batch_sizes))
+               for model_name in exps.results[0].keys()}
+    for exp_idx, results in exps.results.iteritems():
+        for model_name, stats in results.iteritems():
+            if model_name not in timings.keys():
+                timings[model_name] = []
+            timings[model_name][exp_idx] = stats['timings'].mean_difference('train')
+    for model_name, timings in timings.iteritems():
+        plt.plot(batch_sizes, timings, label=model_name)
+    plt.legend()
+    plt.show()
+
+
+if __name__ == '__main__':
+    run_experiments()
