@@ -106,7 +106,7 @@ class Experiments(object):
     def get_table_idxs_by_exp_idxs(self, table, exp_idxs):
         result = set()
         for exp_idx in exp_idxs:
-            resul.add(self.experiments[exp_idx]['%s_idx' % table])
+            result.add(self.experiments[exp_idx]['%s_idx' % table])
         return result
 
     def get_result_idxs_by_table_idx(self, table, idx):
@@ -883,7 +883,17 @@ def plot_times_by_batch(database):
 
         for model_name, timings in timings.iteritems():
             plt.plot(batch_sizes, timings, marker='o', label=model_name,)
-        plt.suptitle('Train time per sample')
+        plt.title('Train time per sample')
+        layers_description = exps.get_layers_description(
+            layers_description_idx
+        )
+        plt.suptitle('layers_description_idx: %d, n_units: %s,'
+                     ' n_hids: %s, k_pers: %s' % (
+            layers_description_idx,
+            layers_description['n_hids'],
+            layers_description['n_units_per'],
+            layers_description['k_pers']
+        ))
         plt.xlabel('Batch Size')
         plt.ylabel('Time (s)')
         plt.legend()
