@@ -889,9 +889,19 @@ if __name__ == '__main__':
         description='Run random_proj experiments and plot results'
     )
     parser.add_argument(
-        '-e', '--execute_experiment',
-        type=int, default=-1,
-        help='Identifier of experiment to execute.'
+        '-m', '--use_models',
+        type=int, default=[], nargs='+',
+        help='Identifier for which models to use in the experiments.'
+    )
+    parser.add_argument(
+        '-b', '--batch_sizes',
+        type=int, default=[1, 9], nargs='+',
+        help='Range of batch sizes to test.'
+    )
+    parser.add_argument(
+        '-n', '--number_of_epochs',
+        type=int, default=1,
+        help='Number of epochs to execute for each experiment.'
     )
     parser.add_argument(
         '-d', '--database',
@@ -1059,11 +1069,14 @@ if __name__ == '__main__':
             )
 
             # Add parameter combinations
-            for idx, batch_size in enumerate(range(5, 6)):
+            for idx, batch_size in enumerate(range(
+                args.batch_sizes[0],
+                args.batch_sizes[1]
+            )):
                 exps.add_parameters(
                     idx,
                     {
-                        'n_epochs': 1,
+                        'n_epochs': args.number_of_epochs,
                         'batch_size': 2**batch_size,
                         'learning_rate': LinearChangeRate(
                             0.21, -0.01, 0.2, 'learning_rate'
@@ -1073,17 +1086,17 @@ if __name__ == '__main__':
                     }
                 )
 
-            if args.execute_experiment > -1:
-                print 'Executing experiment %d' % args.execute_experiment
-                exps.create_experiments([args.execute_experiment])
+            if len(args.use_models) > 0:
+                print 'Executing experiments %s' % args.use_models
+                exps.create_experiments(args.use_models)
             else:
                 exps.create_experiments()
 
         run_experiments(
             exps,
             models=[
-                #EqualParametersModel,
-                #EqualComputationsModel,
+                EqualParametersModel,
+                EqualComputationsModel,
                 SparseBlockModel
             ]
         )
