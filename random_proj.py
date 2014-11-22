@@ -781,17 +781,19 @@ def run_experiments(exps, models, rng=None):
     model = None
     timings = None
     for idx, model_class in product(exps, models):
-        print "Experiment: %d, Model class: %s" % (idx, model_class)
+        print 'Experiment: %d, Model class: %s' % (idx, model_class)
 
         parameters = exps.get_parameters_by_exp_idx(idx)
+
+        print 'Batch size: %d' % parameters['batch_size']
 
         if (
                 data is None
                 or data.batch_size != parameters['batch_size']
                 or data.reshape_data != model_class.reshape_data
         ):
-            print "Loading Data"
-            print "... MNIST"
+            print 'Loading Data'
+            print '... MNIST'
             data = MNIST(parameters['batch_size'], model_class.reshape_data)
             gc.collect()
 
@@ -804,7 +806,7 @@ def run_experiments(exps, models, rng=None):
                 name='learning_rate'
             )
 
-            print "Building model: %s" % str(model_class)
+            print 'Building model: %s' % str(model_class)
             layer_definitions = exps.get_layers_definition(idx)
             model = model_class(
                 data=data,
@@ -815,7 +817,7 @@ def run_experiments(exps, models, rng=None):
                 L2_reg=parameters['L2_reg'],
             )
 
-            print "Training"
+            print 'Training'
             ts = TS()
             ts.start()
             timings = simple_train(
@@ -833,7 +835,7 @@ def run_experiments(exps, models, rng=None):
             epoch_time = -1
 
         if timings is not None:
-            print "epoch_time: %s" % timings
+            print 'epoch_time: %s' % timings
             exps.save(idx, model_class.__name__, 'timings', timings)
 
         timings = None
