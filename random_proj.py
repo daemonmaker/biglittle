@@ -1076,7 +1076,7 @@ if __name__ == '__main__':
                     idx,
                     {
                         'n_epochs': args.number_of_epochs,
-                        'batch_size': 2**batch_size,
+                        'batch_size': batch_size,
                         'learning_rate': LinearChangeRate(
                             0.21, -0.01, 0.2, 'learning_rate'
                         ),
