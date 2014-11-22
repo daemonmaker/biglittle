@@ -1071,10 +1071,7 @@ if __name__ == '__main__':
             )
 
             # Add parameter combinations
-            for idx, batch_size in enumerate(range(
-                args.batch_sizes[0],
-                args.batch_sizes[1]
-            )):
+            for idx, batch_size in enumerate(args.batch_sizes):
                 exps.add_parameters(
                     idx,
                     {
