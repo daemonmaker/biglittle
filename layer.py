@@ -330,7 +330,8 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
 
         return W_val, b_val
 
-    def output(self, x):
+    def output(self, x, index_selection_func=None):
+        from theano.printing import Print
         if self.n_out > 1:
             iWin = self.k
 
@@ -341,7 +342,9 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
                 x.reshape((x.shape[0], x.shape[1]*x.shape[2])),
                 self.rand_proj_mat
             )
-            self.out_idxs = T.argsort(rnd_proj)[:, -self.k:]
+            self.out_idxs = T.sort(T.argsort(rnd_proj)[:, -self.k:])
+            if index_selection_func is not None:
+                self.out_idxs = index_selection_func(self.out_idxs)
             # self.out_idxs.set_value(
             #     np.random.randint(0, self.n_out, (self.batch_size, self.k))
             # )

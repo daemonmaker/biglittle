@@ -57,6 +57,8 @@ class TimingStats(object):
         self.accums[timer] = (self.accums[timer] + diff)
         self.accum_counts[timer] = self.accum_counts[timer] + 1
 
+        return diff
+
     def reset(self, accum=None):
         # Store the accumulated time and count for the specified timer or all
         # timers if none was specified and then reset the associated

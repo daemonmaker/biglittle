@@ -1,6 +1,5 @@
 #! /usr/bin/env python
 
-import ipdb
 import time
 from datetime import datetime
 import numpy as np
@@ -27,12 +26,14 @@ class Experiments(object):
         self.input_dim = input_dim
         self.num_classes = num_classes
 
+        self.layers_descriptions = {}
+        self.parameters = {}
         self.experiments = {}
         self.results = {}
 
     def get_layers_definition(self, idx):
-        layers_description = self.experiments[idx]['layers_description']
-        parameters = self.experiments[idx]['parameters']
+        layers_description = self.get_layers_description_by_exp_idx(idx)
+        parameters = self.get_parameters_by_exp_idx(idx)
 
         # Shared variable used for always activating one block in a layer
         # as in the input and output layer
@@ -45,6 +46,11 @@ class Experiments(object):
         n_units_per = layers_description['n_units_per']
         k_pers = layers_description['k_pers']
         activations = layers_description['activations']
+        index_selection_funcs = layers_description.get(
+            'index_selection_funcs',
+            (None,)*len(activations)
+        )
+        assert(len(activations) == len(index_selection_funcs))
 
         new_exp = []
         new_exp.append({
@@ -53,7 +59,8 @@ class Experiments(object):
             'n_units_per': n_units_per,
             'in_idxs': self.one_block_idxs,
             'k': k_pers[0],
-            'activation': activations[0]
+            'activation': activations[0],
+            'index_selection_func': index_selection_funcs[0]
         })
         for i in range(1, len(k_pers)):
             new_exp.append({
@@ -61,7 +68,8 @@ class Experiments(object):
                 'n_hids': n_hids[i],
                 'n_units_per': n_units_per,
                 'k': k_pers[i],
-                'activation': activations[i]
+                'activation': activations[i],
+                'index_selection_func': index_selection_funcs[i]
             })
         new_exp.append({
             'n_in': n_hids[-1],
@@ -69,26 +77,158 @@ class Experiments(object):
             'n_units_per': n_units_per,
             'out_idxs': self.one_block_idxs,
             'k': 1,
-            'activation': activations[-1]
+            'activation': activations[-1],
+            'index_selection_func': index_selection_funcs[-1]
         })
 
         return new_exp
 
+    def add_layers_description(self, idx, layers_description):
+        self.layers_descriptions[idx] = layers_description
+
+    def get_layers_description(self, idx):
+        return self.layers_descriptions[idx]
+
+    def get_layers_description_by_exp_idx(self, exp_idx):
+        return self.get_layers_description(
+            self.experiments[exp_idx]['layers_description_idx']
+        )
+
+    def add_parameters(self, idx, parameters):
+        self.parameters[idx] = parameters
+
     def get_parameters(self, idx):
         return self.parameters[idx]
 
-    def add(self, idx, layers_description, parameters):
-        self.experiments[idx] = {
-            'layers_description': layers_description,
-            'parameters': parameters
-        }
-        if idx not in self.results.keys():
+    def get_parameters_by_exp_idx(self, exp_idx):
+        return self.get_parameters(self.experiments[exp_idx]['parameters_idx'])
+
+    def get_table_idxs_by_exp_idxs(self, table, exp_idxs):
+        result = set()
+        for exp_idx in exp_idxs:
+            resul.add(self.experiments[exp_idx]['%s_idx' % table])
+        return result
+
+    def get_result_idxs_by_table_idx(self, table, idx):
+        results = []
+        for r_idx in self.results.keys():
+            if self.experiments[r_idx]['%s_idx' % table] == idx:
+                results.append(r_idx)
+        return results
+
+    def create_experiments(
+        self, layers_descriptions_idxs=[], parameters_idxs=[]
+    ):
+        """
+        Creates an experiment for each combination of layers and parameters
+        """
+        assert(type(layers_descriptions_idxs) == list)
+        assert(type(parameters_idxs) == list)
+
+        # Determine which layers and parameters to use
+        if len(layers_descriptions_idxs) == 0:
+            layers_descriptions_idxs = range(len(self.layers_descriptions))
+
+        if len(parameters_idxs) == 0:
+            parameters_idxs = range(len(self.parameters))
+
+        # Create the experiments
+        for idx, (ld_idx, p_idx) in enumerate(product(
+            layers_descriptions_idxs,
+            parameters_idxs
+        )):
+            self.experiments[idx] = {
+                'layers_description_idx': ld_idx,
+                'parameters_idx': p_idx
+            }
             self.results[idx] = {}
+
+    def get_idxs(self, table, filters=[], has_results=False):
+        """
+        Returns a list of idxs from the specified table matching the specified
+        filters. Filters should be a dictionary where the key is the column
+        name and the value is the required value.
+
+        has_results determines whether there are results for a given
+        experiment and is only relevant when search the experiments table.
+        """
+        assert(type(filters) == list)
+
+        if table == 'experiments':
+            source = self.experiments
+        elif table == 'parameters':
+            source = self.parameters
+        elif table == 'layers_descriptions':
+            source = self.layers_descriptions
+
+        if len(filters) == 0:
+            return source.keys()
+
+        results = []
+        for idx, values in source.iteritems():
+            good = True
+
+            # Determine whether the current record fits all the filters
+            for k, v in filters:
+                if values[k] != v:
+                    good = False
+
+            # Determine whether there are results for this experiment
+            if has_results and idx not in self.results.keys():
+                good = False
+
+            if good:
+                results.append(idx)
+        return results
+
+    def get_experiment_idxs(
+            self, layers_description_idx=[], parameters_idx=[]
+    ):
+        assert(type(layers_description_idx) == list)
+        assert(type(parameters_idx) == list)
+
+        results = []
+        for exp_idx, idxs in self.experiments.iteritems():
+            good = True
+            if (
+                    len(layers_description_idx) > 0 and
+                    idxs['layers_description_idx']
+                    not in layers_description_idx
+            ):
+                good = False
+            if (
+                    len(parameters_idxs) > 0 and
+                    idxs['parameters_idx'] not in parameters_idx
+            ):
+                good = False
+            if good:
+                results.append(exp_idx)
+        return results
 
     def save(self, exp_id, model_name, k, v):
         if model_name not in self.results[exp_id].keys():
             self.results[exp_id][model_name] = {}
         self.results[exp_id][model_name][k] = v
+
+    class ExperimentsIterator(object):
+        def __init__(self, exps):
+            self.exps = exps
+
+            self.current_idx = 0
+            self.stop_idx = len(self.exps.experiments) - 1
+
+        def __iter__(self):
+            return self
+
+        def next(self):
+            if self.current_idx > self.stop_idx:
+                raise StopIteration
+
+            self.current_idx += 1
+            return self.current_idx - 1
+
+    def __iter__(self):
+        return self.ExperimentsIterator(self)
 
 
 class MNIST():
@@ -257,6 +397,10 @@ class Model(object):
         }
 
 
+def all_same(idxs):
+    return idxs[0, :].reshape((1, idxs.shape[1])).repeat(idxs.shape[0], axis=0)
+
+
 class SparseBlockModel(Model):
     reshape_data = True
 
@@ -312,7 +456,10 @@ class SparseBlockModel(Model):
                 constructor_params['out_idxs'] = layer_desc['out_idxs']
 
             layers.append(HiddenRandomBlockLayer(**constructor_params))
-            activation = layers[-1].output(activation)
+            activation = layers[-1].output(
+                activation,
+                layer_desc.get('index_selection_func', None)
+            )
 
         return layers
 
@@ -320,8 +467,12 @@ class SparseBlockModel(Model):
         print "... Calculating activation"
         top_active = []
         activation = self.input
+        # TODO DWEBB change this to enumerate the layers instead of using an index
         for i in range(len(self.layers)):
-            activation = self.layers[i].output(activation)
+            activation = self.layers[i].output(
+                activation,
+                self.layer_descriptions[i].get('index_selection_func', None)
+            )
             #top_active.append((
             #    top_actives[i],
             #    T.argsort(T.abs_(l_activation))[:, :l_layers[i].k]
@@ -622,121 +773,17 @@ def train(
     return ts
 
 
-def run_experiments():
-    model_class = SparseBlockModel
-    #model_class = EqualParametersModel
-
-    rng = np.random.RandomState()
-    n_epochs = 1
-
-    layer_descriptions = {
-        0: {
-            'n_hids': (25,),
-            'n_units_per': 20,
-            'k_pers': (1.,),
-            'activations': (T.tanh, None),
-        },
-        1: {
-            'n_hids': (25, 25),
-            'n_units_per': 20,
-            'k_pers': (1., 0.5),
-            'activations': (T.tanh, T.tanh, None),
-        },
-        2: {
-            'n_hids': (25, 100, 25),
-            'n_units_per': 20,
-            'k_pers': (1., 0.25, 1),
-            'activations': (T.tanh, T.tanh, T.tanh, None),
-        },
-        3: {
-            'n_hids': (50, 500, 10),
-            'n_units_per': 20,
-            'k_pers': (0.9, 0.05, 1),
-            'activations': (T.tanh, T.tanh, T.tanh, None),
-        },
-        4: {
-            'n_hids': (50, 500, 500, 10),
-            'n_units_per': 20,
-            'k_pers': (1, 0.05, 0.05, 1),
-            'activations': (T.tanh, T.tanh, T.tanh, T.tanh, None),
-        },
-        5: {
-            'n_hids': (50, 75, 100, 75, 50),
-            'n_units_per': 32,
-            'k_pers': (1., 0.1, 0.05, 0.1, 1),
-            'activations': (T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None),
-        },
-        6: {
-            'n_hids': (50, 500, 750, 750, 500, 10),
-            'n_units_per': 32,
-            'k_pers': (1, 0.1, 0.05, 0.05, 0.1, 1),
-            'activations': (
-                T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
-            ),
-        },
-    }
-
-    parameter_configs = {
-        0: {
-            'batch_size': 32,
-            'learning_rate': LinearChangeRate(
-                0.21, -0.01, 0.2, 'learning_rate'
-            ),
-            'L1_reg': 0.0,
-            'L2_reg': 0.0001
-        },
-        1: {
-            'batch_size': 32,
-            'learning_rate': LinearChangeRate(
-                0.21, -0.01, 0.2, 'learning_rate'
-            ),
-            'L1_reg': 0.0,
-            'L2_reg': 0.0001
-        },
-    }
-
-    parameter_configs = {}
-    for idx, batch_size in enumerate(range(0, 9)):
-        parameter_configs[idx] = {
-            'batch_size': 2**batch_size,
-            'learning_rate': LinearChangeRate(
-                0.21, -0.01, 0.2, 'learning_rate'
-            ),
-            'L1_reg': 0.0,
-            'L2_reg': 0.0001
-        }
-
-    experiments = {}
-    for i, (ld_idx, param_idx) in enumerate(product(
-        range(len(layer_descriptions)),
-        range(len(parameter_configs)),
-    )):
-        experiments[i] = {
-            'layer_description': ld_idx,
-            'parameters': param_idx,
-        }
-
-    exps = Experiments(
-        input_dim=784,  # data.train_set_x.shape[-1].eval(),
-        num_classes=10
-    )
-
-    exps_to_run = [0]
-    exps_to_run = range(len(experiments))
-    models = [EqualParametersModel, EqualComputationsModel, SparseBlockModel]
+def run_experiments(exps, models, rng=None):
+    if rng is None:
+        rng = np.random.RandomState()
 
     data = None
     model = None
     timings = None
-    for idx, model_class in product(exps_to_run, models):
+    for idx, model_class in product(exps, models):
         print "Experiment: %d, Model class: %s" % (idx, model_class)
-        exp_config = experiments[idx]
-        parameters = parameter_configs[exp_config['parameters']]
-        exps.add(
-            idx,
-            layer_descriptions[exp_config['layer_description']],
-            parameters
-        )
+
+        parameters = exps.get_parameters_by_exp_idx(idx)
 
         if (
                 data is None
@@ -758,9 +805,10 @@ def run_experiments():
             )
 
             print "Building model: %s" % str(model_class)
+            layer_definitions = exps.get_layers_definition(idx)
             model = model_class(
                 data=data,
-                layer_descriptions=exps.get_layers_definition(idx),
+                layer_descriptions=layer_definitions,
                 batch_size=parameters['batch_size'],
                 learning_rate=shared_learning_rate,
                 L1_reg=parameters['L1_reg'],
@@ -768,13 +816,16 @@ def run_experiments():
             )
 
             print "Training"
+            ts = TS()
+            ts.start()
             timings = simple_train(
                 model,
                 learning_rate=parameters['learning_rate'],
                 shared_learning_rate=shared_learning_rate,
-                n_epochs=n_epochs,
+                n_epochs=parameters['n_epochs'],
                 **model.build_functions()
             )
+            print 'Training time: %d' % ts.end()
 
             model = None
 
@@ -791,24 +842,248 @@ def run_experiments():
         pkl.dump(exps, open('random_proj_experiments.pkl', 'wb'))
 
 
-def plot_experiments():
+def plot_times_by_batch(database):
     import matplotlib.pyplot as plt
 
-    exps = pkl.load(open('random_proj_experiments.pkl', 'rb'))
-    batch_sizes = [exp['parameters']['batch_size']
-                   for exp_idx, exp in exps.experiments.iteritems()]
-    timings = {model_name: np.zeros(len(batch_sizes))
-               for model_name in exps.results[0].keys()}
-    for exp_idx, results in exps.results.iteritems():
-        for model_name, stats in results.iteritems():
-            if model_name not in timings.keys():
-                timings[model_name] = []
-            timings[model_name][exp_idx] = stats['timings'].mean_difference('train')
-    for model_name, timings in timings.iteritems():
-        plt.plot(batch_sizes, timings, label=model_name)
-    plt.legend()
-    plt.show()
+    # Load the database
+    exps = pkl.load(open(database, 'rb'))
+
+    # Find experiments that have results
+    exp_idxs = exps.get_idxs('experiments', has_results=True)
+
+    # Plot results for each experiment grouped by the layers_description
+    layers_description_idxs = exps.get_table_idxs_by_exp_idxs(
+        'layers_description',
+        exp_idxs
+    )
+
+    for layers_description_idx in layers_description_idxs:
+        result_idxs = exps.get_result_idxs_by_table_idx(
+            'layers_description',
+            layers_description_idx
+        )
+        batch_sizes = [exps.get_parameters_by_exp_idx(idx)['batch_size']
+                       for idx in result_idxs]
+        timings = {model_name: np.zeros(len(batch_sizes))
+                   for model_name in exps.results[result_idxs[0]].keys()}
+        for i, idx in enumerate(result_idxs):
+            for model_name, stats in exps.results[idx].iteritems():
+                timings[model_name][i] = stats[
+                    'timings'
+                ].mean_difference('train')/batch_sizes[i]
+
+        for model_name, timings in timings.iteritems():
+            plt.plot(batch_sizes, timings, marker='o', label=model_name,)
+        plt.suptitle('Train time per sample')
+        plt.xlabel('Batch Size')
+        plt.ylabel('Time (s)')
+        plt.legend()
+        plt.xticks(batch_sizes)
+        plt.show()
 
 
 if __name__ == '__main__':
-    run_experiments()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Run random_proj experiments and plot results'
+    )
+    parser.add_argument(
+        '-e', '--execute_experiment',
+        type=int, default=-1,
+        help='Identifier of experiment to execute.'
+    )
+    parser.add_argument(
+        '-d', '--database',
+        default='random_proj_experiments.pkl',
+        help='Which database to use.'
+    )
+    parser.add_argument(
+        '-l', '--load_database',
+        default=False, action='store_true',
+        help='Whether to load an existing database.'
+    )
+    parser.add_argument(
+        '-p', '--plot',
+        default=False,
+        action='store_true',
+        help='Plot results instaed of execute experiments.'
+    )
+    args = parser.parse_args()
+
+    if args.plot:
+        plot_times_by_batch(args.database)
+    else:
+        if args.load_database:
+            exps = pkl.load(open(args.database))
+        else:
+            ## Create experiments
+            exps = Experiments(
+                input_dim=784,  # data.train_set_x.shape[-1].eval(),
+                num_classes=10
+            )
+
+            # Add descriptions of models
+            exps.add_layers_description(
+                0,
+                {
+                    'n_hids': (25,),
+                    'n_units_per': 32,
+                    'k_pers': (1.,),
+                    'activations': (T.tanh, None),
+                }
+            )
+            exps.add_layers_description(
+                1,
+                {
+                    'n_hids': (25, 25),
+                    'n_units_per': 32,
+                    'k_pers': (1., 0.5),
+                    'activations': (T.tanh, T.tanh, None),
+                }
+            )
+            exps.add_layers_description(
+                2,
+                {
+                    'n_hids': (25, 100, 25),
+                    'n_units_per': 32,
+                    'k_pers': (1., 0.25, 1),
+                    'activations': (T.tanh, T.tanh, T.tanh, None),
+                }
+            )
+            exps.add_layers_description(
+                3,
+                {
+                    'n_hids': (25, 100, 25),
+                    'n_units_per': 32,
+                    'k_pers': (1., 0.25, 1),
+                    'activations': (T.tanh, T.tanh, T.tanh, None),
+                    'index_selection_funcs': (
+                        all_same, all_same, all_same, None
+                    )
+                }
+            )
+            exps.add_layers_description(
+                4,
+                {
+                    'n_hids': (50, 100, 10),
+                    'n_units_per': 32,
+                    'k_pers': (1, 0.05, 1),
+                    'activations': (T.tanh, T.tanh, T.tanh, None),
+                },
+            )
+            exps.add_layers_description(
+                5,
+                {
+                    'n_hids': (50, 100, 10),
+                    'n_units_per': 32,
+                    'k_pers': (1, 0.05, 1),
+                    'activations': (T.tanh, T.tanh, T.tanh, None),
+                    'index_selection_funcs': (
+                        all_same, all_same, all_same, None
+                    )
+                },
+            )
+            exps.add_layers_description(
+                6,
+                {
+                    'n_hids': (50, 100, 100, 10),
+                    'n_units_per': 32,
+                    'k_pers': (1, 0.05, 0.05, 1),
+                    'activations': (T.tanh, T.tanh, T.tanh, T.tanh, None),
+                }
+            )
+            exps.add_layers_description(
+                7,
+                {
+                    'n_hids': (50, 100, 100, 10),
+                    'n_units_per': 32,
+                    'k_pers': (1, 0.05, 0.05, 1),
+                    'activations': (T.tanh, T.tanh, T.tanh, T.tanh, None),
+                    'index_selection_funcs': (
+                        all_same, all_same, all_same, all_same, None
+                    )
+                }
+            )
+            exps.add_layers_description(
+                8,
+                {
+                    'n_hids': (50, 75, 100, 75, 50),
+                    'n_units_per': 32,
+                    'k_pers': (1., 0.1, 0.05, 0.1, 1),
+                    'activations': (
+                        T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
+                    ),
+                }
+            )
+            exps.add_layers_description(
+                9,
+                {
+                    'n_hids': (50, 75, 100, 75, 50),
+                    'n_units_per': 32,
+                    'k_pers': (1., 0.1, 0.05, 0.1, 1),
+                    'activations': (
+                        T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
+                    ),
+                    'index_selection_funcs': (
+                        all_same, all_same, all_same, all_same,
+                        all_same, None
+                    )
+                }
+            )
+            exps.add_layers_description(
+                10,
+                {
+                    'n_hids': (50, 500, 500, 500, 500, 10),
+                    'n_units_per': 32,
+                    'k_pers': (1, 0.1, 0.05, 0.05, 0.1, 1),
+                    'activations': (
+                        T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
+                    ),
+                },
+            )
+            exps.add_layers_description(
+                11,
+                {
+                    'n_hids': (50, 500, 500, 500, 500, 10),
+                    'n_units_per': 32,
+                    'k_pers': (1, 0.1, 0.05, 0.05, 0.1, 1),
+                    'activations': (
+                        T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
+                    ),
+                    'index_selection_funcs': (
+                        all_same, all_same, all_same, all_same,
+                        all_same, all_same, None
+                    )
+                }
+            )
+
+            # Add parameter combinations
+            for idx, batch_size in enumerate(range(5, 6)):
+                exps.add_parameters(
+                    idx,
+                    {
+                        'n_epochs': 1,
+                        'batch_size': 2**batch_size,
+                        'learning_rate': LinearChangeRate(
+                            0.21, -0.01, 0.2, 'learning_rate'
+                        ),
+                        'L1_reg': 0.0,
+                        'L2_reg': 0.0001
+                    }
+                )
+
+            if args.execute_experiment > -1:
+                print 'Executing experiment %d' % args.execute_experiment
+                exps.create_experiments([args.execute_experiment])
+            else:
+                exps.create_experiments()
+
+        run_experiments(
+            exps,
+            models=[
+                #EqualParametersModel,
+                #EqualComputationsModel,
+                SparseBlockModel
+            ]
+        )
