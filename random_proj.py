@@ -578,47 +578,47 @@ class EqualComputationsModel(MLPModel):
 
 
 def simple_train(
-        model,
-        train_model,
-        test_model,
-        validate_model,
-        learning_rate,
-        shared_learning_rate,
-        n_epochs=1000
+    model,
+    train_model,
+    test_model,
+    validate_model,
+    learning_rate,
+    shared_learning_rate,
+    timing_stats,
+    n_epochs=1000
 ):
-    ts = TS(['train', 'epoch'])
+    timing_stats.add(['epoch', 'train'])
     epoch = 0
     minibatch_avg_cost_accum = 0
     while(epoch < n_epochs):
-        ts.start('epoch')
+        timing_stats.start('epoch')
         for minibatch_index in xrange(model.data.n_train_batches):
             if minibatch_index % 10 == 0:
                 print '... minibatch_index: %d/%d\r' \
                     % (minibatch_index, model.data.n_train_batches),
                 # Note the magic comma on the previous line prevents new lines
-            ts.start('train')
+            timing_stats.start('train')
             minibatch_avg_cost = train_model(minibatch_index)
-            ts.end('train')
+            timing_stats.end('train')
 
             minibatch_avg_cost_accum += minibatch_avg_cost[0]
 
         print '... minibatch_avg_cost_accum: %f' \
             % (minibatch_avg_cost_accum/float(model.data.n_train_batches))
 
-        ts.end('epoch')
+        timing_stats.end('epoch')
         epoch += 1
-
-    return ts
 
 
 def train(
-        model,
-        train_model,
-        test_model,
-        validate_model,
-        learning_rate,
-        shared_learning_rate,
-        n_epochs=1000
+    model,
+    train_model,
+    test_model,
+    validate_model,
+    learning_rate,
+    shared_learning_rate,
+    timing_stats,
+    n_epochs=1000
 ):
     def summarize_rates():
         print "Learning rate: ", learning_rate.rate
@@ -644,18 +644,18 @@ def train(
     epoch = 0
     done_looping = False
 
-    ts = TS(['train', 'epoch', 'valid'])
+    timing_stats.add(['train', 'epoch', 'valid'])
 
     summarize_rates()
 
-    ts.start()
+    timing_stats.start()
     while (epoch < n_epochs) and (not done_looping):
         epoch = epoch + 1
-        ts.start('epoch')
+        timing_stats.start('epoch')
         for minibatch_index in xrange(data.n_train_batches):
-            ts.start('train')
+            timing_stats.start('train')
             minibatch_avg_cost = train_model(minibatch_index)
-            ts.end('train')
+            timing_stats.end('train')
             #print "0: ", model.layers[-5].in_idxs.get_value()
             #print "1: ", model.layers[-4].in_idxs.get_value()
             #print "2: ", model.layers[-3].in_idxs.get_value()
@@ -699,13 +699,13 @@ def train(
             iter = (epoch - 1) * data.n_train_batches + minibatch_index
 
             if (iter + 1) % validation_frequency == 0:
-                ts.end('epoch')
-                ts.reset('epoch')
+                timing_stats.end('epoch')
+                timing_stats.reset('epoch')
 
-                ts.reset('train')
+                timing_stats.reset('train')
                 accum = accum / validation_frequency
                 summary = ("minibatch_avg_cost: %f, time: %f"
-                           % (accum, ts.accumed['train'][-1][1]))
+                           % (accum, timing_stats.accumed['train'][-1][1]))
                 accum = 0
 
                 print "%s" % (summary)
@@ -762,15 +762,13 @@ def train(
                     done_looping = True
                     break
 
-    ts.end()
+    timing_stats.end()
     print('Optimization complete. Best validation score of %f %% '
           'obtained at iteration %i, with test performance %f %%' %
           (best_validation_loss * 100., best_iter + 1, test_score * 100.))
     print >> sys.stderr, ('The code for file ' +
                           os.path.split(__file__)[1] +
-                          ' ran for %s' % ts)
-
-    return ts
+                          ' ran for %s' % timing_stats)
 
 
 def run_experiments(exps, models, rng=None):
@@ -806,7 +804,10 @@ def run_experiments(exps, models, rng=None):
                 name='learning_rate'
             )
 
+            timings = TS(['build_model', 'build_functions', 'full_train'])
+
             print 'Building model: %s' % str(model_class)
+            timings.start('build_model')
             layer_definitions = exps.get_layers_definition(idx)
             model = model_class(
                 data=data,
@@ -816,18 +817,24 @@ def run_experiments(exps, models, rng=None):
                 L1_reg=parameters['L1_reg'],
                 L2_reg=parameters['L2_reg'],
             )
+            print '... time: %f' % timings.end('build_model')
+
+            print 'Building functions'
+            timings.start('build_functions')
+            functions = model.build_functions()
+            print '... time: %f' % timings.end('build_functions')
 
             print 'Training'
-            ts = TS()
-            ts.start()
-            timings = simple_train(
+            timings.start('full_train')
+            simple_train(
                 model,
                 learning_rate=parameters['learning_rate'],
                 shared_learning_rate=shared_learning_rate,
                 n_epochs=parameters['n_epochs'],
-                **model.build_functions()
+                timing_stats=timings,
+                **functions
             )
-            print 'Training time: %d' % ts.end()
+            print 'Training time: %d' % timings.end('full_train')
 
             model = None
 
@@ -835,7 +842,7 @@ def run_experiments(exps, models, rng=None):
             epoch_time = -1
 
         if timings is not None:
-            print 'epoch_time: %s' % timings
+            print 'Timings: %s' % timings
             exps.save(idx, model_class.__name__, 'timings', timings)
 
         timings = None

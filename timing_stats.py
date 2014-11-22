@@ -3,7 +3,7 @@ import numpy as np
 
 
 class TimingStats(object):
-    def __init__(self, timer_list=None, multiplier=1000):
+    def __init__(self, timer_list=[], multiplier=1000):
         assert(multiplier > 0)
         self.multiplier = multiplier
 
@@ -32,15 +32,16 @@ class TimingStats(object):
         self.accumed = {'default': []}
 
         # Create specified timers
-        assert(timer_list is None
-               or (isinstance(timer_list, list) and len(timer_list) > 0))
-        if timer_list is not None:
-            for timer in timer_list:
-                self.timers[timer] = 0
-                self.diffs[timer] = []
-                self.accums[timer] = 0
-                self.accum_counts[timer] = 0
-                self.accumed[timer] = []
+        self.add(timer_list)
+
+    def add(self, timer_list):
+        assert(isinstance(timer_list, list))
+        for timer in timer_list:
+            self.timers[timer] = 0
+            self.diffs[timer] = []
+            self.accums[timer] = 0
+            self.accum_counts[timer] = 0
+            self.accumed[timer] = []
 
     def start(self, timer='default'):
         # Record the start time
@@ -51,6 +52,8 @@ class TimingStats(object):
         # Record the difference between the start and end time
         end_time = time.time()
         diff = end_time*self.multiplier - self.timers[timer]*self.multiplier
+        if timer not in self.diffs.keys():
+            self.diffs[timer] = []
         self.diffs[timer].append(diff)
 
         # Add the difference to the accumulator and increment the related count
@@ -64,6 +67,8 @@ class TimingStats(object):
         # timers if none was specified and then reset the associated
         # accumulator value and count.
         if accum is not None:
+            if accum not in self.accumed.keys():
+                self.accumed[accum] = []
             self.accumed[accum].append(
                 (self.accum_counts[accum], self.accums[accum])
             )
@@ -71,6 +76,8 @@ class TimingStats(object):
             self.accum_counts[accum] = 0
         else:
             for accum, value in self.accums.iteritems():
+                if accum not in self.accumed.keys():
+                    self.accumed[accum] = []
                 self.accumed[accum].append(
                     (self.accum_counts[accum], self.accums[accum])
                 )
