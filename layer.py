@@ -127,17 +127,18 @@ class HiddenLayer(object):
 class HiddenBlockLayer(HiddenLayer):
     def __init__(
         self,
+        x,
         n_in,
         n_out,
         in_idxs,
-        out_idxs,
-        batch_size,
+        out_idxs=None,
+        batch_size=1,
         k=0,
         activation=T.tanh,
         name='HiddenBlockLayer',
         rng=None,
         l_params=None,
-        l_param_map=None
+        l_param_map=None,
     ):
         assert(
             type(n_in) == tuple
@@ -166,7 +167,19 @@ class HiddenBlockLayer(HiddenLayer):
         )
 
         self.in_idxs = in_idxs
+
         self.out_idxs = out_idxs
+        if self.out_idxs is None:
+            self.out_idxs = shared(
+                np.repeat(
+                    np.arange(self.k).reshape(1, self.k),
+                    batch_size,
+                    axis=0
+                ),
+                name="%s_out_idxs" % (name)
+            )
+        self.out_idxs = self.out_idxs
+
 
         if l_params is not None:
             assert(l_param_map is not None)
@@ -175,8 +188,9 @@ class HiddenBlockLayer(HiddenLayer):
 
     def __str__(self):
         return (
-            "n_in: %d (%d units), n_out: %d (%d units), k: %d"
+            "%25s n_in: %d (%d units), n_out: %d (%d units), k: %d"
             % (
+                type(self).__name__,
                 self.n_in,
                 self.n_units_per_in,
                 self.n_out,
@@ -219,14 +233,18 @@ class HiddenBlockLayer(HiddenLayer):
 
         return W_val, b_val
 
-    def output(self, x):
+    def output(self, x, index_selection_func=None):
+        out_idxs = self.out_idxs
+        if index_selection_func is not None:
+            out_idxs = index_selection_func(out_idxs)
+
         if self.l_params is None:
             sparse = sparse_block_dot_SS(
                 self.W,
                 x,
                 self.in_idxs,
                 self.b,
-                self.out_idxs
+                out_idxs
             )
         else:
             sparse = sparse_block_dot_SS(
@@ -239,7 +257,7 @@ class HiddenBlockLayer(HiddenLayer):
                 self.l_params[1].dimshuffle(
                     *self.l_param_map[1]
                 )*self.b,
-                self.out_idxs
+                out_idxs
             )
 
         return (sparse if self.activation is None
@@ -268,6 +286,7 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
             HiddenRandomBlockLayer,
             self
         ).__init__(
+            x=x,
             n_in=n_in,
             n_out=n_out,
             in_idxs=in_idxs,
@@ -284,16 +303,6 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
             #            (iWin*self.n_units_per_in, self.n_out)
             (x.shape[1]*x.shape[2], self.n_out)
         )
-        # self.out_idxs = out_idxs
-        # if self.out_idxs is None:
-        #     self.out_idxs = shared(
-        #         np.repeat(
-        #             np.arange(self.k).reshape(1, self.k),
-        #             batch_size,
-        #             axis=0
-        #         ),
-        #         name="%s_out_idxs" % (name)
-        #     )
 
 
     def _init_parameters(self):
@@ -331,7 +340,6 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
         return W_val, b_val
 
     def output(self, x, index_selection_func=None):
-        from theano.printing import Print
         if self.n_out > 1:
             iWin = self.k
 
@@ -346,34 +354,20 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
             if index_selection_func is not None:
                 self.out_idxs = index_selection_func(rnd_proj)
             else:
-                self.out_idxs = T.sort(T.argsort(rnd_proj))
-            self.out_idxs = self.out_idxs[:, -self.k:]
+                self.out_idxs = T.argsort(rnd_proj)
+            self.out_idxs = T.sort(self.out_idxs[:, -self.k:])
 
             # self.out_idxs.set_value(
             #     np.random.randint(0, self.n_out, (self.batch_size, self.k))
             # )
 
-        if self.l_params is None:
-            sparse = sparse_block_dot_SS(
-                self.W,
-                x,
-                self.in_idxs,
-                self.b,
-                self.out_idxs
-            )
-        else:
-            sparse = sparse_block_dot_SS(
-                self.l_params[0].dimshuffle(
-                    *self.l_param_map[0]
-                )*self.W,
-                #self.W,
-                x,
-                self.in_idxs,
-                self.l_params[1].dimshuffle(
-                    *self.l_param_map[1]
-                )*self.b,
-                self.out_idxs
-            )
+        sparse = sparse_block_dot_SS(
+            self.W,
+            x,
+            self.in_idxs,
+            self.b,
+            self.out_idxs
+        )
 
         return (sparse if self.activation is None
                 else self.activation(sparse))

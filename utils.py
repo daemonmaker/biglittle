@@ -236,3 +236,28 @@ def load_data(dataset, reshape=False):
     rval = [(train_set_x, train_set_y), (valid_set_x, valid_set_y),
             (test_set_x, test_set_y)]
     return rval
+
+
+class MNIST():
+    def __init__(self, batch_size, reshape_data=False):
+        assert(batch_size > 0)
+        self.batch_size = batch_size
+
+        self.reshape_data = reshape_data
+
+        dataset = 'mnist.pkl.gz'
+        datasets = load_data(dataset, reshape_data)
+
+        self.train_set_x, self.train_set_y = datasets[0]
+        self.valid_set_x, self.valid_set_y = datasets[1]
+        self.test_set_x, self.test_set_y = datasets[2]
+
+        self.n_train_batches = self.train_set_x.get_value(
+            borrow=True
+        ).shape[0] / self.batch_size
+        self.n_valid_batches = self.valid_set_x.get_value(
+            borrow=True
+        ).shape[0] / self.batch_size
+        self.n_test_batches = self.test_set_x.get_value(
+            borrow=True
+        ).shape[0] / self.batch_size
