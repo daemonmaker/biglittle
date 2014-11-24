@@ -264,17 +264,6 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
         self.k = int(n_out[0]*k)
         assert(self.k > 0)
 
-        # self.out_idxs = out_idxs
-        # if self.out_idxs is None:
-        #     self.out_idxs = shared(
-        #         np.repeat(
-        #             np.arange(self.k).reshape(1, self.k),
-        #             batch_size,
-        #             axis=0
-        #         ),
-        #         name="%s_out_idxs" % (name)
-        #     )
-
         super(
             HiddenRandomBlockLayer,
             self
@@ -295,6 +284,17 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
             #            (iWin*self.n_units_per_in, self.n_out)
             (x.shape[1]*x.shape[2], self.n_out)
         )
+        # self.out_idxs = out_idxs
+        # if self.out_idxs is None:
+        #     self.out_idxs = shared(
+        #         np.repeat(
+        #             np.arange(self.k).reshape(1, self.k),
+        #             batch_size,
+        #             axis=0
+        #         ),
+        #         name="%s_out_idxs" % (name)
+        #     )
+
 
     def _init_parameters(self):
         inputSize = self.n_in*self.n_units_per_in
@@ -342,9 +342,13 @@ class HiddenRandomBlockLayer(HiddenBlockLayer):
                 x.reshape((x.shape[0], x.shape[1]*x.shape[2])),
                 self.rand_proj_mat
             )
-            self.out_idxs = T.sort(T.argsort(rnd_proj)[:, -self.k:])
+
             if index_selection_func is not None:
-                self.out_idxs = index_selection_func(self.out_idxs)
+                self.out_idxs = index_selection_func(rnd_proj)
+            else:
+                self.out_idxs = T.sort(T.argsort(rnd_proj))
+            self.out_idxs = self.out_idxs[:, -self.k:]
+
             # self.out_idxs.set_value(
             #     np.random.randint(0, self.n_out, (self.batch_size, self.k))
             # )

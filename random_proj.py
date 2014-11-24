@@ -5,6 +5,7 @@ from datetime import datetime
 import numpy as np
 import sys
 import os
+import os.path as op
 import cPickle as pkl
 from itertools import product
 import gc
@@ -398,7 +399,9 @@ class Model(object):
 
 
 def all_same(idxs):
-    return idxs[0, :].reshape((1, idxs.shape[1])).repeat(idxs.shape[0], axis=0)
+    first_row = idxs[0, :].reshape((1, idxs.shape[1]))
+    first_row = T.sort(T.argsort(first_row))
+    return first_row.repeat(idxs.shape[0], axis=0)
 
 
 class SparseBlockModel(Model):
@@ -898,6 +901,16 @@ def plot_times_by_batch(database):
         plt.ylabel('Time (s)')
         plt.legend()
         plt.xticks(batch_sizes)
+        figs_dir = 'figs'
+        if not op.exists(figs_dir):
+            os.mkdir(figs_dir)
+        plt.savefig(
+            op.join(
+                figs_dir,
+                'layers_description_%d.png' % layers_description_idx
+            ),
+            format='png'
+        )
         plt.show()
 
 
@@ -921,6 +934,11 @@ if __name__ == '__main__':
         '-n', '--number_of_epochs',
         type=int, default=1,
         help='Number of epochs to execute for each experiment.'
+    )
+    parser.add_argument(
+        '-u', '--units_per_block',
+        type=int, default=32,
+        help='Number of units per block in the sparse block models.'
     )
     parser.add_argument(
         '-d', '--database',
@@ -957,7 +975,7 @@ if __name__ == '__main__':
                 0,
                 {
                     'n_hids': (25,),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1.,),
                     'activations': (T.tanh, None),
                 }
@@ -966,7 +984,7 @@ if __name__ == '__main__':
                 1,
                 {
                     'n_hids': (25, 25),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1., 0.5),
                     'activations': (T.tanh, T.tanh, None),
                 }
@@ -975,7 +993,7 @@ if __name__ == '__main__':
                 2,
                 {
                     'n_hids': (25, 100, 25),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1., 0.25, 1),
                     'activations': (T.tanh, T.tanh, T.tanh, None),
                 }
@@ -984,7 +1002,7 @@ if __name__ == '__main__':
                 3,
                 {
                     'n_hids': (25, 100, 25),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1., 0.25, 1),
                     'activations': (T.tanh, T.tanh, T.tanh, None),
                     'index_selection_funcs': (
@@ -996,7 +1014,7 @@ if __name__ == '__main__':
                 4,
                 {
                     'n_hids': (50, 100, 10),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1, 0.05, 1),
                     'activations': (T.tanh, T.tanh, T.tanh, None),
                 },
@@ -1005,7 +1023,7 @@ if __name__ == '__main__':
                 5,
                 {
                     'n_hids': (50, 100, 10),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1, 0.05, 1),
                     'activations': (T.tanh, T.tanh, T.tanh, None),
                     'index_selection_funcs': (
@@ -1017,7 +1035,7 @@ if __name__ == '__main__':
                 6,
                 {
                     'n_hids': (50, 100, 100, 10),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1, 0.05, 0.05, 1),
                     'activations': (T.tanh, T.tanh, T.tanh, T.tanh, None),
                 }
@@ -1026,7 +1044,7 @@ if __name__ == '__main__':
                 7,
                 {
                     'n_hids': (50, 100, 100, 10),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1, 0.05, 0.05, 1),
                     'activations': (T.tanh, T.tanh, T.tanh, T.tanh, None),
                     'index_selection_funcs': (
@@ -1038,7 +1056,7 @@ if __name__ == '__main__':
                 8,
                 {
                     'n_hids': (50, 75, 100, 75, 50),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1., 0.1, 0.05, 0.1, 1),
                     'activations': (
                         T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
@@ -1049,7 +1067,7 @@ if __name__ == '__main__':
                 9,
                 {
                     'n_hids': (50, 75, 100, 75, 50),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1., 0.1, 0.05, 0.1, 1),
                     'activations': (
                         T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
@@ -1064,7 +1082,7 @@ if __name__ == '__main__':
                 10,
                 {
                     'n_hids': (50, 500, 500, 500, 500, 10),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1, 0.1, 0.05, 0.05, 0.1, 1),
                     'activations': (
                         T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
@@ -1075,7 +1093,7 @@ if __name__ == '__main__':
                 11,
                 {
                     'n_hids': (50, 500, 500, 500, 500, 10),
-                    'n_units_per': 32,
+                    'n_units_per': args.units_per_block,
                     'k_pers': (1, 0.1, 0.05, 0.05, 0.1, 1),
                     'activations': (
                         T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
