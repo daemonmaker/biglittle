@@ -336,17 +336,22 @@ def plot_times_by_batch(database):
 
         for model_name, timings in timings.iteritems():
             plt.plot(batch_sizes, timings, marker='o', label=model_name,)
-        plt.title('Train time per sample')
+        plt.title('Train time per sample', fontsize=12)
         layers_description = exps.get_layers_description(
             layers_description_idx
         )
-        plt.suptitle('layers_description_idx: %d, n_units: %s,'
-                     ' n_hids: %s, k_pers: %s' % (
-            layers_description_idx,
-            layers_description['n_hids'],
-            layers_description['n_units_per'],
-            layers_description['k_pers']
-        ))
+        plt.suptitle(
+            'layers_description_idx: %d, n_units: %s, n_hids: %s,\n'
+            'k_pers: %s, all same: %r' % (
+                layers_description_idx,
+                layers_description['n_hids'],
+                layers_description['n_units_per'],
+                layers_description['k_pers'],
+                'index_selection_funcs' in layers_description.keys()
+            ),
+            y=0.99,
+            fontsize=10
+        )
         plt.xlabel('Batch Size')
         plt.ylabel('Time (s)')
         plt.legend()
@@ -697,6 +702,21 @@ if __name__ == '__main__':
                         all_same, all_same, None
                     )
                 }
+            )
+            exps.add_layers_description(
+                14,
+                {
+                    'n_hids': (50, 100, 20),
+                    'n_units_per': args.units_per_block,
+                    'k_pers': (1, 0.05, 0.05, 1),
+                    'activations': (T.tanh, T.tanh, T.tanh, None),
+                    'layer_classes': [
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                    ],
+                },
             )
 
             # Add parameter combinations
