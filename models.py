@@ -3,6 +3,11 @@ from theano import tensor as T
 from theano import config
 
 from utils import *
+from layer import (
+    HiddenLayer,
+    HiddenBlockLayer,
+    HiddenRandomBlockLayer
+)
 
 
 class Model(object):

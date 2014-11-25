@@ -495,7 +495,7 @@ if __name__ == '__main__':
             exps.add_layers_description(
                 4,
                 {
-                    'n_hids': (50, 100, 10),
+                    'n_hids': (50, 100, 20),
                     'n_units_per': args.units_per_block,
                     'k_pers': (1, 0.05, 0.2, 1),
                     'activations': (T.tanh, T.tanh, T.tanh, None),
@@ -510,7 +510,7 @@ if __name__ == '__main__':
             exps.add_layers_description(
                 5,
                 {
-                    'n_hids': (50, 100, 10),
+                    'n_hids': (50, 100, 20),
                     'n_units_per': args.units_per_block,
                     'k_pers': (1, 0.05, 0.05, 1),
                     'activations': (T.tanh, T.tanh, T.tanh, None),
@@ -563,9 +563,9 @@ if __name__ == '__main__':
             exps.add_layers_description(
                 8,
                 {
-                    'n_hids': (50, 75, 100, 75, 50),
+                    'n_hids': (50, 200, 500, 200, 50),
                     'n_units_per': args.units_per_block,
-                    'k_pers': (1., 0.1, 0.05, 0.05, 0.1, 1),
+                    'k_pers': (1., 0.1, 0.02, 0.02, 0.1, 1),
                     'activations': (
                         None, T.tanh, T.tanh, T.tanh, T.tanh, None
                     ),
@@ -582,7 +582,7 @@ if __name__ == '__main__':
             exps.add_layers_description(
                 9,
                 {
-                    'n_hids': (50, 75, 100, 75, 50),
+                    'n_hids': (50, 75, 200, 75, 50),
                     'n_units_per': args.units_per_block,
                     'k_pers': (1., 0.1, 0.05, 0.05, 0.1, 1),
                     'activations': (
@@ -605,9 +605,9 @@ if __name__ == '__main__':
             exps.add_layers_description(
                 10,
                 {
-                    'n_hids': (50, 500, 500, 500, 500, 10),
+                    'n_hids': (50, 500, 500, 500, 500, 20),
                     'n_units_per': args.units_per_block,
-                    'k_pers': (1, 0.1, 0.05, 0.05, 0.05, 0.1, 1),
+                    'k_pers': (1, 0.07, 0.03, 0.02, 0.01, 0.15, 1),
                     'activations': (
                         T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
                     ),
@@ -625,14 +625,66 @@ if __name__ == '__main__':
             exps.add_layers_description(
                 11,
                 {
-                    'n_hids': (50, 500, 500, 500, 500, 10),
+                    'n_hids': (50, 500, 500, 500, 500, 20),
                     'n_units_per': args.units_per_block,
-                    'k_pers': (1, 0.1, 0.05, 0.05, 0.05, 0.1, 1),
+                    'k_pers': (1, 0.07, 0.03, 0.02, 0.01, 0.15, 1),
                     'activations': (
                         T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, T.tanh, None
                     ),
                     'layer_classes': [
                         HiddenBlockLayer,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        HiddenBlockLayer,
+                    ],
+                    'index_selection_funcs': (
+                        None, all_same, all_same, all_same,
+                        all_same, all_same, None
+                    )
+                }
+            )
+            exps.add_layers_description(
+                12,
+                {
+                    'n_hids': (50, 100, 500, 500, 500, 500, 500, 100, 20),
+                    'n_units_per': args.units_per_block,
+                    'k_pers': (1, 0.1, 0.05, 0.01, 0.01, 0.01, 0.01, 0.05, 0.1, 1),
+                    'activations': (
+                        None, T.tanh, T.tanh, T.tanh, T.tanh,
+                        T.tanh, T.tanh, T.tanh, T.tanh, None
+                    ),
+                    'layer_classes': [
+                        HiddenBlockLayer,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        layer_class,
+                        HiddenBlockLayer,
+                    ],
+                },
+            )
+            exps.add_layers_description(
+                13,
+                {
+                    'n_hids': (50, 100, 500, 500, 500, 500, 500, 100, 20),
+                    'n_units_per': args.units_per_block,
+                    'k_pers': (1, 0.1, 0.05, 0.01, 0.01, 0.01, 0.1, 0.5, 0.1, 1),
+                    'activations': (
+                        None, T.tanh, T.tanh, T.tanh, T.tanh,
+                        T.tanh, T.tanh, T.tanh, T.tanh, None
+                    ),
+                    'layer_classes': [
+                        HiddenBlockLayer,
+                        layer_class,
+                        layer_class,
+                        layer_class,
                         layer_class,
                         layer_class,
                         layer_class,
@@ -671,8 +723,8 @@ if __name__ == '__main__':
         run_experiments(
             exps,
             models=[
-                #EqualParametersModel,
-                #EqualComputationsModel,
+                EqualParametersModel,
+                EqualComputationsModel,
                 SparseBlockModel
             ]
         )
